@@ -115,6 +115,8 @@ fn ppo_solves_cartpole() {
 
     let mut recent_returns: Vec<f32> = Vec::new();
     let mut best_avg = 0.0f32;
+    // Persist across rollouts so episodes spanning multiple rollouts are tracked correctly
+    let mut ep_return = vec![0.0f32; n_envs];
 
     for iter in 0..n_iterations {
         // Linear LR annealing (CleanRL default)
@@ -131,7 +133,6 @@ fn ppo_solves_cartpole() {
         );
 
         // Track completed episode returns
-        let mut ep_return = vec![0.0f32; n_envs];
         for step in 0..config.n_steps {
             for env_idx in 0..n_envs {
                 let idx = step * n_envs + env_idx;

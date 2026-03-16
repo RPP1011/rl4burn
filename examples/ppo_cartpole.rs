@@ -97,12 +97,14 @@ fn main() {
         minibatch_size: 128,
         n_steps: 128,
         clip_vloss: true,
+        max_grad_norm: 0.5,
     };
 
     let total_timesteps = 500_000;
     let steps_per_iter = config.n_steps * n_envs;
     let n_iterations = total_timesteps / steps_per_iter;
     let mut recent_returns: Vec<f32> = Vec::new();
+    let mut ep_return = vec![0.0f32; n_envs];
 
     println!("Training PPO on CartPole-v1 ({total_timesteps} timesteps, {n_envs} envs)");
     println!("{:-<80}", "");
@@ -119,8 +121,6 @@ fn main() {
             &device,
             &mut rng,
         );
-
-        let mut ep_return = vec![0.0f32; n_envs];
         for step in 0..config.n_steps {
             for env_idx in 0..n_envs {
                 let idx = step * n_envs + env_idx;
