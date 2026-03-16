@@ -97,6 +97,10 @@ pub struct PpoRollout {
     pub advantages: Vec<f32>,
     /// Value targets = advantages + values (computed after collection).
     pub returns: Vec<f32>,
+    /// Completed episode returns during this rollout.
+    /// Correctly tracks episodes that span multiple rollouts
+    /// (accumulated via `episode_returns_acc`).
+    pub episode_returns: Vec<f32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -139,12 +143,18 @@ fn sample_categorical(probs: &[f32], rng: &mut impl Rng) -> usize {
 /// plain floats. No computation graph is retained.
 ///
 /// After stepping, GAE advantages and returns are computed.
+///
+/// `episode_returns_acc` tracks per-env cumulative reward across rollout
+/// boundaries. Initialize it to `vec![0.0; n_envs]` before the first call
+/// and pass the same Vec on every subsequent call. Completed episode returns
+/// are stored in `PpoRollout::episode_returns`.
 pub fn ppo_collect<B, M, E>(
     model: &M,
     envs: &mut SyncVecEnv<E>,
     config: &PpoConfig,
     device: &B::Device,
     rng: &mut impl Rng,
+    episode_returns_acc: &mut Vec<f32>,
 ) -> PpoRollout
 where
     B: Backend,
@@ -165,6 +175,12 @@ where
     let mut values_vec = Vec::with_capacity(total);
     let mut rewards = Vec::with_capacity(total);
     let mut dones = Vec::with_capacity(total);
+    let mut episode_returns = Vec::new();
+
+    // Initialize accumulator if needed (first call)
+    if episode_returns_acc.is_empty() {
+        episode_returns_acc.resize(n_envs, 0.0);
+    }
 
     // Current observations for each env
     let mut current_obs: Vec<Vec<f32>> = envs.reset();
@@ -211,9 +227,14 @@ where
 
         // Step environments
         let steps = envs.step(step_actions);
-        for step in &steps {
+        for (env_idx, step) in steps.iter().enumerate() {
             rewards.push(step.reward);
             dones.push(step.done());
+            episode_returns_acc[env_idx] += step.reward;
+            if step.done() {
+                episode_returns.push(episode_returns_acc[env_idx]);
+                episode_returns_acc[env_idx] = 0.0;
+            }
         }
 
         // Update current observations
@@ -262,6 +283,7 @@ where
         dones,
         advantages,
         returns,
+        episode_returns,
     }
 }
 

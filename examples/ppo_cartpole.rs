@@ -104,7 +104,7 @@ fn main() {
     let steps_per_iter = config.n_steps * n_envs;
     let n_iterations = total_timesteps / steps_per_iter;
     let mut recent_returns: Vec<f32> = Vec::new();
-    let mut ep_return = vec![0.0f32; n_envs];
+    let mut ep_acc = vec![0.0f32; n_envs];
 
     println!("Training PPO on CartPole-v1 ({total_timesteps} timesteps, {n_envs} envs)");
     println!("{:-<80}", "");
@@ -120,17 +120,9 @@ fn main() {
             &config,
             &device,
             &mut rng,
+            &mut ep_acc,
         );
-        for step in 0..config.n_steps {
-            for env_idx in 0..n_envs {
-                let idx = step * n_envs + env_idx;
-                ep_return[env_idx] += rollout.rewards[idx];
-                if rollout.dones[idx] {
-                    recent_returns.push(ep_return[env_idx]);
-                    ep_return[env_idx] = 0.0;
-                }
-            }
-        }
+        recent_returns.extend_from_slice(&rollout.episode_returns);
 
         let stats;
         (model, stats) =
