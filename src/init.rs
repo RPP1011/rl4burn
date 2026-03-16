@@ -3,43 +3,21 @@
 //! Provides orthogonal initialization (critical for PPO convergence)
 //! as used in CleanRL, OpenAI baselines, and Stable Baselines3.
 
-use burn::module::{Module, ModuleMapper, Param};
-use burn::nn::{Linear, LinearConfig};
+use burn::module::{Module, Param};
+use burn::nn::{Linear, LinearConfig, LinearRecord};
 use burn::prelude::*;
 use burn::tensor::TensorData;
 
 use rand::Rng;
 use rand_distr::{Distribution, StandardNormal};
 
-/// Mapper that replaces parameter tensors with pre-computed data.
-struct WeightReplacer<B: Backend> {
-    replacements: Vec<Tensor<B, 1>>, // flattened tensors to inject
-    idx: usize,
-}
-
-impl<B: Backend> ModuleMapper<B> for WeightReplacer<B> {
-    fn map_float<const D: usize>(
-        &mut self,
-        param: Param<Tensor<B, D>>,
-    ) -> Param<Tensor<B, D>> {
-        if self.idx < self.replacements.len() {
-            let dims = param.val().dims();
-            let replacement = self.replacements[self.idx].clone().reshape(dims);
-            self.idx += 1;
-            Param::initialized(param.id.clone(), replacement).set_require_grad(true)
-        } else {
-            param
-        }
-    }
-}
-
 /// Create a `Linear` layer with orthogonal weight initialization and zero bias.
 ///
 /// Matches PyTorch's `nn.init.orthogonal_(layer.weight, gain)` +
 /// `nn.init.constant_(layer.bias, 0.0)` as used in CleanRL's `layer_init`.
 ///
-/// Uses `Module::map` to replace weights while preserving Burn's autodiff
-/// parameter tracking.
+/// Uses `Param::from_data` + `load_record` (Burn's canonical way to set
+/// custom parameter data while preserving autodiff tracking).
 pub fn orthogonal_linear<B: Backend>(
     d_in: usize,
     d_out: usize,
@@ -47,24 +25,18 @@ pub fn orthogonal_linear<B: Backend>(
     device: &B::Device,
     rng: &mut impl Rng,
 ) -> Linear<B> {
-    // Create a standard Linear first (properly registered with autodiff)
-    let linear: Linear<B> = LinearConfig::new(d_in, d_out).init(device);
-
     // Generate orthogonal weight data [d_in, d_out] (Burn's layout)
-    let weight_data = orthogonal_matrix(d_in, d_out, gain, rng);
-    let weight_flat: Tensor<B, 1> =
-        Tensor::from_data(TensorData::new(weight_data, [d_in * d_out]), device);
+    let weight_data = TensorData::new(orthogonal_matrix(d_in, d_out, gain, rng), [d_in, d_out]);
+    let bias_data = TensorData::new(vec![0.0f32; d_out], [d_out]);
 
-    // Zero bias [d_out]
-    let bias_flat: Tensor<B, 1> =
-        Tensor::from_data(TensorData::new(vec![0.0f32; d_out], [d_out]), device);
-
-    // Use ModuleMapper to replace param tensors while preserving tracking
-    let mut mapper = WeightReplacer {
-        replacements: vec![weight_flat, bias_flat],
-        idx: 0,
+    // Create record with properly tracked Params
+    let record = LinearRecord {
+        weight: Param::from_data(weight_data, device),
+        bias: Some(Param::from_data(bias_data, device)),
     };
-    linear.map(&mut mapper)
+
+    // Init default Linear, then load our custom weights
+    LinearConfig::new(d_in, d_out).init(device).load_record(record)
 }
 
 /// Generate an orthogonal matrix of shape [rows, cols] scaled by `gain`.

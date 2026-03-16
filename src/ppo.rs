@@ -7,6 +7,7 @@
 //! normalization, value loss clipping, and support for LR annealing.
 //! Configure gradient clipping (`max_grad_norm=0.5`) on your optimizer.
 
+use crate::clip::clip_grad_norm;
 use crate::env::Env;
 use crate::gae;
 use crate::policy::{DiscreteAcOutput, DiscreteActorCritic};
@@ -51,6 +52,9 @@ pub struct PpoConfig {
     pub n_steps: usize,
     /// Whether to clip the value function loss (CleanRL default: true).
     pub clip_vloss: bool,
+    /// Maximum gradient norm for global gradient clipping (0.0 = disabled).
+    /// Matches PyTorch's `clip_grad_norm_` (global, not per-parameter).
+    pub max_grad_norm: f32,
 }
 
 impl Default for PpoConfig {
@@ -66,6 +70,7 @@ impl Default for PpoConfig {
             minibatch_size: 128,
             n_steps: 128,
             clip_vloss: true,
+            max_grad_norm: 0.5,
         }
     }
 }
@@ -424,9 +429,12 @@ where
             total_kl += approx_kl_val;
             n_updates += 1;
 
-            // Backward pass and optimizer step
+            // Backward pass with global gradient norm clipping
             let grads = loss.backward();
-            let grads = GradientsParams::from_grads(grads, &model);
+            let mut grads = GradientsParams::from_grads(grads, &model);
+            if config.max_grad_norm > 0.0 {
+                grads = clip_grad_norm(&model, grads, config.max_grad_norm);
+            }
             model = optim.step(current_lr, model, grads);
         }
     }

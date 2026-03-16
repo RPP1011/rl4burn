@@ -21,6 +21,7 @@ pub mod wrapper;
 pub mod policy;
 
 // Building blocks
+pub mod clip;
 pub mod init;
 pub mod vtrace;
 pub mod replay;

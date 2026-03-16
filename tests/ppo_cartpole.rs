@@ -87,10 +87,10 @@ fn ppo_solves_cartpole() {
     // Model with orthogonal init (matching CleanRL's layer_init)
     let model: Agent<AutodiffB> = Agent::new(&device, &mut rng);
 
-    // Adam(lr=2.5e-4, eps=1e-5) with gradient clipping at 0.5
+    // Adam(lr=2.5e-4, eps=1e-5). No per-parameter clipping — global
+    // clipping is handled inside ppo_update via max_grad_norm.
     let mut optim = AdamConfig::new()
         .with_epsilon(1e-5)
-        .with_grad_clipping(Some(GradientClippingConfig::Norm(0.5)))
         .init();
 
     // CleanRL defaults
@@ -105,6 +105,7 @@ fn ppo_solves_cartpole() {
         minibatch_size: 128, // batch_size(512) / num_minibatches(4)
         n_steps: 128,
         clip_vloss: true,
+        max_grad_norm: 0.5,
     };
 
     let mut model = model;
@@ -116,8 +117,7 @@ fn ppo_solves_cartpole() {
     let mut best_avg = 0.0f32;
 
     for iter in 0..n_iterations {
-        // Linear LR annealing: frac = 1.0 - (iteration - 1) / num_iterations
-        // CleanRL iteration is 1-indexed, ours is 0-indexed
+        // Linear LR annealing (CleanRL default)
         let frac = 1.0 - iter as f64 / n_iterations as f64;
         let current_lr = config.lr * frac;
 
@@ -143,29 +143,9 @@ fn ppo_solves_cartpole() {
             }
         }
 
-        // Debug: print actor weight norm before/after update for first few iters
-        let actor_norm_before: f32 = if iter < 3 {
-            model.actor_out.weight.val().powf_scalar(2.0).sum().into_scalar()
-        } else { 0.0 };
-
         let stats;
         (model, stats) =
             ppo_update(model, &mut optim, &rollout, &config, current_lr, &device, &mut rng);
-
-        if iter < 3 {
-            let actor_norm_after: f32 = model.actor_out.weight.val().into_data().to_vec::<f32>().unwrap()
-                .iter().map(|x| x * x).sum::<f32>();
-            let critic_norm_after: f32 = model.critic_out.weight.val().into_data().to_vec::<f32>().unwrap()
-                .iter().map(|x| x * x).sum::<f32>();
-            let critic_fc1_after: f32 = model.critic_fc1.weight.val().into_data().to_vec::<f32>().unwrap()
-                .iter().map(|x| x * x).sum::<f32>();
-            let actor_fc1_after: f32 = model.actor_fc1.weight.val().into_data().to_vec::<f32>().unwrap()
-                .iter().map(|x| x * x).sum::<f32>();
-            eprintln!(
-                "iter {}: actor_out_L2={:.8} critic_out_L2={:.6} actor_fc1_L2={:.4} critic_fc1_L2={:.4}",
-                iter, actor_norm_after, critic_norm_after, actor_fc1_after, critic_fc1_after
-            );
-        }
 
         if recent_returns.len() > 20 {
             let start = recent_returns.len() - 20;
