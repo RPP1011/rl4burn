@@ -1,5 +1,5 @@
 [package]
-name = "burn-rl"
+name = "rl4burn"
 version = "0.1.0"
 edition = "2021"
 description = "Reinforcement learning algorithms for the Burn ML framework"

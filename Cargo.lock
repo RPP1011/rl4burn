@@ -441,13 +441,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "burn-rl"
-version = "0.1.0"
-dependencies = [
- "burn",
-]
-
-[[package]]
 name = "burn-rocm"
 version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3277,6 +3270,13 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rl4burn"
+version = "0.1.0"
+dependencies = [
+ "burn",
 ]
 
 [[package]]
