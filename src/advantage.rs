@@ -1,9 +1,14 @@
 //! Advantage normalization utilities.
 
+use contracts::*;
+
 /// Normalize advantages to zero mean, unit variance, then clamp.
 ///
 /// Operates on raw f32 slice, returns normalized Vec.
 /// Clamping prevents explosive gradients from outlier advantages.
+#[requires(clamp > 0.0, "clamp must be positive")]
+#[ensures(ret.len() == advantages.len(), "output length matches input")]
+#[ensures(ret.iter().all(|&x| x >= -clamp && x <= clamp), "all values within clamp range")]
 pub fn normalize(advantages: &[f32], clamp: f32) -> Vec<f32> {
     let n = advantages.len();
     if n == 0 { return vec![]; }

@@ -3,6 +3,8 @@
 //! Pure f32 computation — no tensors, no backend dependency.
 //! Operates on a single trajectory.
 
+use contracts::*;
+
 /// V-trace off-policy correction for a single trajectory.
 ///
 /// # Arguments
@@ -16,6 +18,17 @@
 ///
 /// # Returns
 /// `(value_targets, advantages)` — both same length as inputs.
+#[requires(!log_rhos.is_empty(), "trajectory must have at least one step")]
+#[requires(log_rhos.len() == discounts.len(), "all inputs must have same length")]
+#[requires(log_rhos.len() == rewards.len(), "all inputs must have same length")]
+#[requires(log_rhos.len() == values.len(), "all inputs must have same length")]
+#[requires(clip_rho > 0.0, "clip_rho must be positive")]
+#[requires(clip_c > 0.0, "clip_c must be positive")]
+#[requires(bootstrap.is_finite(), "bootstrap must be finite")]
+#[ensures(ret.0.len() == log_rhos.len(), "value targets length matches input")]
+#[ensures(ret.1.len() == log_rhos.len(), "advantages length matches input")]
+#[ensures(ret.0.iter().all(|v| v.is_finite()), "value targets must be finite")]
+#[ensures(ret.1.iter().all(|a| a.is_finite()), "advantages must be finite")]
 pub fn vtrace_targets(
     log_rhos: &[f32],
     discounts: &[f32],
@@ -26,9 +39,6 @@ pub fn vtrace_targets(
     clip_c: f32,
 ) -> (Vec<f32>, Vec<f32>) {
     let len = log_rhos.len();
-    assert_eq!(len, discounts.len());
-    assert_eq!(len, rewards.len());
-    assert_eq!(len, values.len());
 
     let rhos: Vec<f32> = log_rhos.iter()
         .map(|&lr| lr.clamp(-20.0, 20.0).exp())

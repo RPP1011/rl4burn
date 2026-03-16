@@ -2,6 +2,8 @@
 //!
 //! Generic over sample type — users define their own sample struct.
 
+use contracts::*;
+
 /// A replay buffer that stores samples with trajectory metadata.
 ///
 /// Supports:
@@ -16,6 +18,7 @@ pub struct ReplayBuffer<S> {
 
 impl<S> ReplayBuffer<S> {
     /// Create a new replay buffer with the given capacity.
+    #[requires(capacity > 0, "capacity must be positive")]
     pub fn new(capacity: usize) -> Self {
         Self {
             samples: Vec::new(),
@@ -25,6 +28,7 @@ impl<S> ReplayBuffer<S> {
     }
 
     /// Add samples, evicting uniformly at random if over capacity.
+    #[ensures(self.len() <= self.capacity)]
     pub fn extend(&mut self, new_samples: impl IntoIterator<Item = S>) {
         self.samples.extend(new_samples);
         if self.samples.len() > self.capacity {
@@ -49,6 +53,7 @@ impl<S> ReplayBuffer<S> {
     }
 
     /// Sample a random minibatch of `size` (with replacement).
+    #[ensures(ret.len() <= size)]
     pub fn sample(&mut self, size: usize) -> Vec<&S> {
         let n = self.samples.len();
         if n == 0 { return vec![]; }
@@ -61,6 +66,7 @@ impl<S> ReplayBuffer<S> {
     }
 
     /// Sample a random minibatch of cloned samples.
+    #[ensures(ret.len() <= size)]
     pub fn sample_cloned(&mut self, size: usize) -> Vec<S> where S: Clone {
         let n = self.samples.len();
         if n == 0 { return vec![]; }

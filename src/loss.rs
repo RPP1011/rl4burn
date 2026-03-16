@@ -1,6 +1,9 @@
 //! Loss functions for RL training.
 //!
-//! Backend-generic — works with any Burn backend that supports autodiff.
+//! Backend-generic — works with any Burn backend.
+//!
+//! All loss functions return a `Tensor<B, 1>` with shape [1] (scalar).
+//! This is compatible with `.backward()` for autodiff backends.
 
 use burn::prelude::*;
 use burn::tensor::activation::log_softmax;
