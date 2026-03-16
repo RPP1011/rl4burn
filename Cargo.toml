@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 burn = { version = "0.20", default-features = false, features = ["std"] }
 contracts = "0.6"
+rand = { version = "0.8", features = ["small_rng"] }
 
 [dev-dependencies]
 burn = { version = "0.20", default-features = false, features = ["std", "ndarray"] }

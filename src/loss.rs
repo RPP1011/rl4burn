@@ -98,8 +98,8 @@ mod tests {
     #[test]
     fn huber_less_than_mse_for_large_errors() {
         let dev = Default::default();
-        let pred = Tensor::<B, 1>::from_floats([0.0], &dev);
-        let target = Tensor::<B, 1>::from_floats([5.0], &dev);
+        let _pred = Tensor::<B, 1>::from_floats([0.0], &dev);
+        let _target = Tensor::<B, 1>::from_floats([5.0], &dev);
         let huber: f32 = value_loss(
             Tensor::<B, 1>::from_floats([0.0], &dev),
             Tensor::<B, 1>::from_floats([5.0], &dev),
