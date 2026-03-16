@@ -3,21 +3,18 @@
 //! Provides rollout collection and PPO update as composable functions.
 //! The user supplies the actor-critic model, optimizer, and environments.
 //!
-//! # Architecture
-//!
-//! PPO is on-policy: it collects fresh experience using the current policy,
-//! then performs multiple epochs of minibatch gradient descent on that data.
-//! The clipped surrogate objective prevents the policy from changing too much
-//! in a single update, maintaining stability.
+//! Matches the CleanRL reference implementation: per-minibatch advantage
+//! normalization, value loss clipping, and support for LR annealing.
+//! Configure gradient clipping (`max_grad_norm=0.5`) on your optimizer.
 
 use crate::env::Env;
 use crate::gae;
-use crate::policy::{DiscreteActorCritic, DiscreteAcOutput};
+use crate::policy::{DiscreteAcOutput, DiscreteActorCritic};
 use crate::vec_env::SyncVecEnv;
 
 use burn::optim::{GradientsParams, Optimizer};
 use burn::prelude::*;
-use burn::tensor::activation::{log_softmax, softmax};
+use burn::tensor::activation::{log_softmax, relu, softmax};
 use burn::tensor::backend::AutodiffBackend;
 use burn::tensor::TensorData;
 
@@ -28,6 +25,10 @@ use rand::Rng;
 // ---------------------------------------------------------------------------
 
 /// PPO hyperparameters.
+///
+/// Defaults match CleanRL's `ppo.py`. Configure gradient clipping
+/// (typically `max_grad_norm=0.5`) on your optimizer — e.g. via
+/// `AdamConfig::new().with_grad_clipping(Some(GradientClippingConfig::Norm(0.5)))`.
 #[derive(Debug, Clone)]
 pub struct PpoConfig {
     /// Learning rate for the optimizer.
@@ -36,7 +37,7 @@ pub struct PpoConfig {
     pub gamma: f32,
     /// GAE smoothing parameter λ.
     pub gae_lambda: f32,
-    /// Clipping range for the policy ratio.
+    /// Clipping range ε for the policy ratio.
     pub clip_eps: f32,
     /// Value loss coefficient.
     pub vf_coef: f32,
@@ -48,6 +49,8 @@ pub struct PpoConfig {
     pub minibatch_size: usize,
     /// Number of steps to collect per environment per rollout.
     pub n_steps: usize,
+    /// Whether to clip the value function loss (CleanRL default: true).
+    pub clip_vloss: bool,
 }
 
 impl Default for PpoConfig {
@@ -60,8 +63,9 @@ impl Default for PpoConfig {
             vf_coef: 0.5,
             ent_coef: 0.01,
             update_epochs: 4,
-            minibatch_size: 64,
+            minibatch_size: 128,
             n_steps: 128,
+            clip_vloss: true,
         }
     }
 }
@@ -108,7 +112,7 @@ pub struct PpoStats {
 // ---------------------------------------------------------------------------
 
 fn sample_categorical(probs: &[f32], rng: &mut impl Rng) -> usize {
-    let u: f32 = rng.gen();
+    let u: f32 = rng.random();
     let mut cum = 0.0;
     for (i, &p) in probs.iter().enumerate() {
         cum += p;
@@ -263,13 +267,18 @@ where
 /// Perform a PPO update: multiple epochs of minibatch gradient descent
 /// on the collected rollout.
 ///
+/// Pass `current_lr` to support learning rate annealing (e.g. linear decay).
+/// If not annealing, pass `config.lr`.
+///
 /// Returns the updated model and training statistics.
 pub fn ppo_update<B, M, O>(
     mut model: M,
     optim: &mut O,
     rollout: &PpoRollout,
     config: &PpoConfig,
+    current_lr: f64,
     device: &B::Device,
+    rng: &mut impl Rng,
 ) -> (M, PpoStats)
 where
     B: AutodiffBackend,
@@ -279,32 +288,22 @@ where
     let total = rollout.observations.len();
     let obs_dim = rollout.observations[0].len();
 
-    // Normalize advantages
-    let adv_mean: f32 = rollout.advantages.iter().sum::<f32>() / total as f32;
-    let adv_var: f32 = rollout
-        .advantages
-        .iter()
-        .map(|a| (a - adv_mean).powi(2))
-        .sum::<f32>()
-        / total as f32;
-    let adv_std = adv_var.sqrt().max(1e-8);
-    let norm_advantages: Vec<f32> = rollout
-        .advantages
-        .iter()
-        .map(|a| (a - adv_mean) / adv_std)
-        .collect();
-
     let mut total_policy_loss = 0.0f32;
     let mut total_value_loss = 0.0f32;
     let mut total_entropy = 0.0f32;
     let mut total_kl = 0.0f32;
     let mut n_updates = 0u32;
 
-    // Index array for shuffling
-    let indices: Vec<usize> = (0..total).collect();
+    // Index array, shuffled each epoch to avoid systematic minibatch bias
+    let mut indices: Vec<usize> = (0..total).collect();
 
     for _epoch in 0..config.update_epochs {
-        // Simple deterministic iteration (shuffling would need rng, keep it simple)
+        // Fisher-Yates shuffle
+        for i in (1..indices.len()).rev() {
+            let j = rng.random_range(0..=i);
+            indices.swap(i, j);
+        }
+
         for start in (0..total).step_by(config.minibatch_size) {
             let end = (start + config.minibatch_size).min(total);
             let batch_size = end - start;
@@ -330,17 +329,28 @@ where
             let old_lp: Tensor<B, 1> =
                 Tensor::from_data(TensorData::new(old_lp_data, [batch_size]), device);
 
-            let adv_data: Vec<f32> = batch_indices
+            // Per-minibatch advantage normalization (matches CleanRL)
+            let raw_adv: Vec<f32> = batch_indices
                 .iter()
-                .map(|&i| norm_advantages[i])
+                .map(|&i| rollout.advantages[i])
                 .collect();
+            let mb_mean: f32 = raw_adv.iter().sum::<f32>() / batch_size as f32;
+            let mb_var: f32 =
+                raw_adv.iter().map(|a| (a - mb_mean).powi(2)).sum::<f32>() / batch_size as f32;
+            let mb_std = mb_var.sqrt().max(1e-8);
+            let norm_adv: Vec<f32> = raw_adv.iter().map(|a| (a - mb_mean) / mb_std).collect();
             let adv_tensor: Tensor<B, 1> =
-                Tensor::from_data(TensorData::new(adv_data, [batch_size]), device);
+                Tensor::from_data(TensorData::new(norm_adv, [batch_size]), device);
 
             let ret_data: Vec<f32> =
                 batch_indices.iter().map(|&i| rollout.returns[i]).collect();
             let ret_tensor: Tensor<B, 1> =
                 Tensor::from_data(TensorData::new(ret_data, [batch_size]), device);
+
+            let old_val_data: Vec<f32> =
+                batch_indices.iter().map(|&i| rollout.values[i]).collect();
+            let old_values: Tensor<B, 1> =
+                Tensor::from_data(TensorData::new(old_val_data, [batch_size]), device);
 
             // Forward pass
             let output = model.forward(obs_tensor);
@@ -358,39 +368,49 @@ where
 
             // Entropy: H = -sum(p * log_p, dim=1).mean()
             let probs = softmax(output.logits, 1);
-            let entropy_per_sample: Tensor<B, 1> = (probs.clone() * new_log_probs)
+            let entropy_per_sample: Tensor<B, 1> = (probs * new_log_probs)
                 .sum_dim(1)
                 .squeeze_dim::<1>(1)
                 .neg();
             let entropy: Tensor<B, 1> = entropy_per_sample.mean().unsqueeze();
 
             // Policy ratio
-            let log_ratio = new_action_lp.clone() - old_lp.clone();
+            let log_ratio = new_action_lp - old_lp;
             let ratio = log_ratio.clone().exp();
 
             // Approximate KL divergence for monitoring
             let approx_kl_val: f32 = log_ratio
-                .clone()
                 .powf_scalar(2.0)
                 .mean()
                 .into_data()
                 .to_vec::<f32>()
-                .unwrap()[0];
+                .unwrap()[0]
+                * 0.5;
 
             // Clipped surrogate objective
             let surr1 = ratio.clone() * adv_tensor.clone();
-            let surr2 = ratio.clamp(1.0 - config.clip_eps, 1.0 + config.clip_eps) * adv_tensor;
-
-            // Element-wise min
-            let surr1_greater = surr1.clone().greater(surr2.clone());
-            let min_surr = surr1.mask_where(surr1_greater, surr2);
+            let surr2 =
+                ratio.clamp(1.0 - config.clip_eps, 1.0 + config.clip_eps) * adv_tensor;
+            // min(surr1, surr2) = surr2 + min(surr1 - surr2, 0)
+            //                   = surr2 - relu(surr2 - surr1)
+            let min_surr = surr2.clone() - relu(surr2 - surr1);
             let policy_loss: Tensor<B, 1> = min_surr.mean().neg().unsqueeze();
 
-            // Value loss (MSE)
-            let value_loss: Tensor<B, 1> = (output.values - ret_tensor)
-                .powf_scalar(2.0)
-                .mean()
-                .unsqueeze();
+            // Value loss with optional clipping (CleanRL default: clipped)
+            // Uses max(a,b) = a + relu(b - a) to avoid mask_where gradient issues.
+            let new_values = output.values;
+            let value_loss: Tensor<B, 1> = if config.clip_vloss {
+                let v_clipped = old_values.clone()
+                    + (new_values.clone() - old_values)
+                        .clamp(-config.clip_eps, config.clip_eps);
+                let v_loss_unclipped = (new_values - ret_tensor.clone()).powf_scalar(2.0);
+                let v_loss_clipped = (v_clipped - ret_tensor).powf_scalar(2.0);
+                let v_loss_max =
+                    v_loss_unclipped.clone() + relu(v_loss_clipped - v_loss_unclipped);
+                (v_loss_max.mean() * 0.5).unsqueeze()
+            } else {
+                ((new_values - ret_tensor).powf_scalar(2.0).mean() * 0.5).unsqueeze()
+            };
 
             // Total loss
             let loss = policy_loss.clone()
@@ -407,7 +427,7 @@ where
             // Backward pass and optimizer step
             let grads = loss.backward();
             let grads = GradientsParams::from_grads(grads, &model);
-            model = optim.step(config.lr, model, grads);
+            model = optim.step(current_lr, model, grads);
         }
     }
 

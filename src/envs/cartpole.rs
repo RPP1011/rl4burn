@@ -53,7 +53,7 @@ impl<R: Rng> Env for CartPole<R> {
 
     fn reset(&mut self) -> Vec<f32> {
         for s in &mut self.state {
-            *s = self.rng.gen_range(-0.05..0.05);
+            *s = self.rng.random_range(-0.05..0.05);
         }
         self.step_count = 0;
         self.state.to_vec()

@@ -56,11 +56,7 @@ pub trait Policy<B: Backend> {
     fn act(&self, obs: Tensor<B, 2>) -> Tensor<B, 2>;
 }
 
-/// Blanket implementation: any DiscreteActorCritic is also a deterministic
-/// Policy (by taking the argmax action).
-impl<B: Backend, M: DiscreteActorCritic<B>> Policy<B> for M {
-    fn act(&self, obs: Tensor<B, 2>) -> Tensor<B, 2> {
-        let output = self.forward(obs);
-        output.logits.argmax(1).float()
-    }
+/// Convenience: get the greedy (argmax) action from an actor-critic model.
+pub fn greedy_action<B: Backend>(output: &DiscreteAcOutput<B>) -> Tensor<B, 2> {
+    output.logits.clone().argmax(1).float()
 }

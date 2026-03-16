@@ -21,6 +21,7 @@ pub mod wrapper;
 pub mod policy;
 
 // Building blocks
+pub mod init;
 pub mod vtrace;
 pub mod replay;
 pub mod loss;
@@ -30,6 +31,7 @@ pub mod polyak;
 
 // Algorithms
 pub mod ppo;
+pub mod dqn;
 
 // Built-in environments
 pub mod envs;
@@ -44,5 +46,7 @@ pub use loss::{policy_loss_continuous, policy_loss_discrete, value_loss};
 pub use advantage::normalize;
 pub use gae::gae;
 pub use polyak::polyak_update;
-pub use policy::{DiscreteActorCritic, DiscreteAcOutput, Policy};
+pub use init::orthogonal_linear;
+pub use policy::{DiscreteActorCritic, DiscreteAcOutput, Policy, greedy_action};
 pub use ppo::{PpoConfig, PpoRollout, PpoStats, ppo_collect, ppo_update};
+pub use dqn::{QNetwork, DqnConfig, DqnStats, Transition, dqn_update, epsilon_greedy, epsilon_schedule};
