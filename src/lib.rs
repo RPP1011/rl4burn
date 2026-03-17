@@ -47,7 +47,11 @@ pub use algo::ppo::{ppo_collect, ppo_update, PpoConfig, PpoRollout, PpoStats};
 pub use algo::ppo_masked::{
     masked_ppo_collect, masked_ppo_update, MaskedActorCritic, MaskedPpoRollout,
 };
+pub use algo::behavioral_cloning::{bc_loss_discrete, bc_loss_multi_head, bc_step};
 pub use algo::distillation::{distillation_loss, value_distillation_loss, DistillationConfig};
+pub use algo::league::{AgentRole, League, LeagueAgentConfig};
+pub use algo::multi_agent::{batch_multi_agent_obs, broadcast_team_reward, unbatch_actions, MultiAgentRolloutData};
+pub use algo::pfsp::{PfspConfig, PfspMatchmaking, PlayerRecord};
 pub use algo::privileged_critic::{make_critic_input, PrivilegedActorCritic};
 pub use algo::self_play::{branch_agent, SelfPlayPool};
 pub use algo::z_conditioning::{z_reward, ZConditioning, ZConditioningConfig};
