@@ -13,8 +13,8 @@ readme = "README.md"
 [dependencies]
 burn = { version = "0.20", default-features = false, features = ["std"] }
 contracts = "0.6"
-rand = "0.9"
-rand_distr = "0.5"
+rand = "0.10"
+rand_distr = "0.6"
 crc32c = { version = "0.6", optional = true }
 gif = { version = "0.13", optional = true }
 
