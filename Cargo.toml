@@ -1,6 +1,6 @@
 [package]
 name = "rl4burn"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Reinforcement learning algorithms for the Burn ML framework"
 license = "MIT"
