@@ -326,14 +326,17 @@ where
             let old_lp: Tensor<B, 1> =
                 Tensor::from_data(TensorData::new(old_lp_data, [batch_size]), device);
 
-            // Per-minibatch advantage normalization (matches CleanRL)
+            // Per-minibatch advantage normalization (matches CleanRL — sample std)
             let raw_adv: Vec<f32> = batch_indices
                 .iter()
                 .map(|&i| rollout.advantages[i])
                 .collect();
             let mb_mean: f32 = raw_adv.iter().sum::<f32>() / batch_size as f32;
-            let mb_var: f32 =
-                raw_adv.iter().map(|a| (a - mb_mean).powi(2)).sum::<f32>() / batch_size as f32;
+            let mb_var: f32 = raw_adv
+                .iter()
+                .map(|a| (a - mb_mean).powi(2))
+                .sum::<f32>()
+                / (batch_size as f32 - 1.0).max(1.0);
             let mb_std = mb_var.sqrt().max(1e-8);
             let norm_adv: Vec<f32> = raw_adv.iter().map(|a| (a - mb_mean) / mb_std).collect();
             let adv_tensor: Tensor<B, 1> =
@@ -428,6 +431,13 @@ where
                 grads = clip_grad_norm(&model, grads, config.max_grad_norm);
             }
             model = optim.step(current_lr, model, grads);
+        }
+
+        // Target KL early stopping (matches CleanRL)
+        if let Some(target) = config.target_kl {
+            if n_updates > 0 && (total_kl / n_updates as f32) > target {
+                break;
+            }
         }
     }
 

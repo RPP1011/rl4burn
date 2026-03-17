@@ -71,6 +71,10 @@ impl<E: Env> Env for EpisodeStats<E> {
     fn action_space(&self) -> Space {
         self.inner.action_space()
     }
+
+    fn action_mask(&self) -> Option<Vec<f32>> {
+        self.inner.action_mask()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +114,10 @@ impl<E: Env> Env for RewardClip<E> {
 
     fn action_space(&self) -> Space {
         self.inner.action_space()
+    }
+
+    fn action_mask(&self) -> Option<Vec<f32>> {
+        self.inner.action_mask()
     }
 }
 
@@ -194,6 +202,99 @@ impl<E: Env<Observation = Vec<f32>>> Env for NormalizeObservation<E> {
 
     fn action_space(&self) -> Space {
         self.inner.action_space()
+    }
+
+    fn action_mask(&self) -> Option<Vec<f32>> {
+        self.inner.action_mask()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// NormalizeReward
+// ---------------------------------------------------------------------------
+
+/// Normalizes rewards by the running standard deviation of discounted returns.
+///
+/// Matches Gymnasium's `NormalizeReward` wrapper. Tracks the discounted return
+/// accumulator and normalizes each reward by the running std of these returns.
+/// This stabilizes the value function target scale across training.
+///
+/// The mean is tracked but not subtracted — only division by std is applied.
+/// Normalized rewards are clipped to `[-clip, clip]`.
+pub struct NormalizeReward<E> {
+    inner: E,
+    gamma: f32,
+    clip: f32,
+    ret: f64,
+    // Running stats for returns (Welford's online algorithm)
+    mean: f64,
+    var: f64,
+    count: f64,
+}
+
+impl<E: Env> NormalizeReward<E> {
+    pub fn new(inner: E, gamma: f32, clip: f32) -> Self {
+        Self {
+            inner,
+            gamma,
+            clip,
+            ret: 0.0,
+            mean: 0.0,
+            var: 1.0,
+            count: 1e-4,
+        }
+    }
+
+    fn update_return_stats(&mut self, ret: f64) {
+        let new_count = self.count + 1.0;
+        let delta = ret - self.mean;
+        self.mean += delta / new_count;
+        let m_a = self.var * self.count;
+        let m_b = (ret - self.mean) * delta;
+        self.var = (m_a + m_b) / new_count;
+        self.count = new_count;
+    }
+}
+
+impl<E: Env> Env for NormalizeReward<E> {
+    type Observation = E::Observation;
+    type Action = E::Action;
+
+    fn reset(&mut self) -> Self::Observation {
+        self.ret = 0.0;
+        self.inner.reset()
+    }
+
+    fn step(&mut self, action: Self::Action) -> Step<Self::Observation> {
+        let step = self.inner.step(action);
+
+        // Update discounted return (resets on done, matching Gymnasium)
+        let not_done = if step.done() { 0.0f64 } else { 1.0 };
+        self.ret = self.ret * self.gamma as f64 * not_done + step.reward as f64;
+        self.update_return_stats(self.ret);
+
+        // Normalize by std of returns (no centering)
+        let std = (self.var.max(1e-8)).sqrt() as f32;
+        let normalized_reward = (step.reward / std).clamp(-self.clip, self.clip);
+
+        Step {
+            observation: step.observation,
+            reward: normalized_reward,
+            terminated: step.terminated,
+            truncated: step.truncated,
+        }
+    }
+
+    fn observation_space(&self) -> Space {
+        self.inner.observation_space()
+    }
+
+    fn action_space(&self) -> Space {
+        self.inner.action_space()
+    }
+
+    fn action_mask(&self) -> Option<Vec<f32>> {
+        self.inner.action_mask()
     }
 }
 

@@ -23,6 +23,7 @@ use rand::SeedableRng;
 
 use rl4burn::envs::Pendulum;
 use rl4burn::log::{CompositeLogger, PrintLogger};
+use rl4burn::wrapper::{NormalizeObservation, NormalizeReward};
 use rl4burn::{
     masked_ppo_collect, masked_ppo_update, ActionDist, Loggable, LogStdMode, Logger,
     MaskedActorCritic, PpoConfig, SyncVecEnv,
@@ -87,9 +88,15 @@ fn main() {
     let mut rng = rand::rngs::SmallRng::seed_from_u64(42);
 
     let n_envs = 4;
-    let envs: Vec<Pendulum<rand::rngs::SmallRng>> = (0..n_envs)
-        .map(|i| Pendulum::new(rand::rngs::SmallRng::seed_from_u64(1000 + i as u64)))
-        .collect();
+    // Wrap with observation and reward normalization (matching CleanRL)
+    let envs: Vec<NormalizeReward<NormalizeObservation<Pendulum<rand::rngs::SmallRng>>>> =
+        (0..n_envs)
+            .map(|i| {
+                let env = Pendulum::new(rand::rngs::SmallRng::seed_from_u64(1000 + i as u64));
+                let env = NormalizeObservation::new(env, 10.0);
+                NormalizeReward::new(env, 0.99, 10.0)
+            })
+            .collect();
     let mut vec_env = SyncVecEnv::new(envs);
 
     let mut model: ContinuousAC<AutodiffB> = ContinuousAC::new(&device);
@@ -112,6 +119,7 @@ fn main() {
         n_steps: 256,
         clip_vloss: true,
         max_grad_norm: 0.5,
+        target_kl: None,
     };
 
     let total_timesteps = 1_000_000;
