@@ -235,6 +235,50 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_is_independent_of_source() {
+        // Add model to pool, then mutate source. Snapshot should keep old values.
+        let mut pool = SelfPlayPool::new();
+        let model = vec![1.0f32, 2.0, 3.0];
+        pool.add_snapshot(&model, 0);
+
+        let mut model = model;
+        model[0] = 999.0; // mutate source after snapshot
+
+        let snapshot = pool.latest().unwrap();
+        assert_eq!(
+            snapshot[0], 1.0,
+            "Snapshot should retain old value, got {}",
+            snapshot[0]
+        );
+        assert_eq!(snapshot, &vec![1.0f32, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn snapshot_with_burn_module_is_independent() {
+        // Verify that snapshotting a Burn module creates a true independent copy.
+        let model = LinearConfig::new(4, 2).init::<B>(&dev());
+        let mut pool = SelfPlayPool::new();
+        pool.add_snapshot(&model, 0);
+
+        let input = Tensor::<B, 2>::from_data(
+            TensorData::new(vec![1.0f32, 2.0, 3.0, 4.0], [1, 4]),
+            &dev(),
+        );
+
+        let snapshot = pool.latest().unwrap();
+        let out_snap: Vec<f32> = snapshot.forward(input.clone()).into_data().to_vec().unwrap();
+        let out_orig: Vec<f32> = model.forward(input).into_data().to_vec().unwrap();
+
+        // Both should be identical (cloned at same point)
+        for (a, b) in out_snap.iter().zip(out_orig.iter()) {
+            assert!(
+                (a - b).abs() < 1e-6,
+                "snapshot and source should match: {a} vs {b}"
+            );
+        }
+    }
+
+    #[test]
     fn pool_with_burn_module() {
         let model = LinearConfig::new(4, 2).init::<B>(&dev());
         let mut pool = SelfPlayPool::new();

@@ -243,4 +243,80 @@ mod tests {
         // MSE of (1,2,3) vs (0,0,0) = (1+4+9)/3 = 14/3 ≈ 4.667
         assert!((loss - 14.0 / 3.0).abs() < 1e-4, "expected ~4.667, got {loss}");
     }
+
+    // -- Teacher immutability -------------------------------------------------
+
+    #[test]
+    fn teacher_logits_unchanged_after_distillation() {
+        // The distillation API takes teacher logits as a plain tensor (expected
+        // to be detached by the caller). Verify that passing teacher logits
+        // through distillation_loss does not mutate them.
+        let teacher_data = vec![2.0f32, 1.0, -1.0, -2.0, 3.0, 0.0];
+        let teacher = Tensor::<B, 2>::from_data(
+            TensorData::new(teacher_data.clone(), [2, 3]),
+            &dev(),
+        );
+        let student = Tensor::<B, 2>::from_data(
+            TensorData::new(vec![0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0], [2, 3]),
+            &dev(),
+        );
+        let config = DistillationConfig::default();
+
+        // Record teacher values before distillation
+        let teacher_before: Vec<f32> = teacher.clone().into_data().to_vec().unwrap();
+
+        let _loss = distillation_loss(teacher.clone(), student, &config);
+
+        // Teacher should be unchanged after distillation
+        let teacher_after: Vec<f32> = teacher.into_data().to_vec().unwrap();
+        assert_eq!(
+            teacher_before, teacher_after,
+            "teacher logits must not be mutated by distillation"
+        );
+    }
+
+    #[test]
+    fn distillation_gradient_does_not_flow_to_teacher() {
+        // When teacher logits are detached (as the API requires), gradients
+        // should only update student parameters, not teacher.
+        use burn::backend::Autodiff;
+        type AB = Autodiff<NdArray>;
+
+        let dev = <AB as Backend>::Device::default();
+
+        let teacher_logits: Tensor<AB, 2> = Tensor::from_data(
+            TensorData::new(vec![2.0f32, 1.0, -1.0], [1, 3]),
+            &dev,
+        )
+        .require_grad();
+        let student_logits: Tensor<AB, 2> = Tensor::from_data(
+            TensorData::new(vec![0.0f32, 0.0, 0.0], [1, 3]),
+            &dev,
+        )
+        .require_grad();
+
+        let config = DistillationConfig::default();
+
+        // Detach teacher (as the API doc requires)
+        let loss = distillation_loss(
+            teacher_logits.clone().detach(),
+            student_logits.clone(),
+            &config,
+        );
+        let grads = loss.backward();
+
+        // Student should have gradients
+        let student_grad = student_logits.grad(&grads);
+        assert!(student_grad.is_some(), "student should receive gradients");
+        let sg_data: Vec<f32> = student_grad.unwrap().into_data().to_vec().unwrap();
+        let student_has_nonzero = sg_data.iter().any(|&g| g.abs() > 1e-8);
+        assert!(student_has_nonzero, "student gradients should be non-zero");
+
+        // Teacher was detached, so it should have no gradient
+        let teacher_grad = teacher_logits.grad(&grads);
+        assert!(
+            teacher_grad.is_none(),
+            "detached teacher should have no gradients in the graph"
+        );
+    }
 }

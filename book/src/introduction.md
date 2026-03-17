@@ -6,12 +6,31 @@ rl4burn lets you write RL algorithms once with `B: AutodiffBackend` and run them
 
 ## What's included
 
+### Algorithms
+
 | Algorithm | Type | Status |
 |-----------|------|--------|
 | **PPO** | On-policy, actor-critic | Solves CartPole in <1s |
+| **Dual-Clip PPO** | PPO for distributed training | JueWu/HoK-style |
 | **DQN** | Off-policy, value-based | Solves CartPole in ~9s |
+| **Behavioral Cloning** | Supervised imitation | Cross-entropy on demonstrations |
+| **Policy Distillation** | Teacher-student transfer | Temperature-scaled KL |
 
-Plus the building blocks to implement your own algorithms: GAE, V-trace, replay buffers, polyak updates, loss functions, orthogonal initialization, and global gradient clipping.
+### Neural Network Modules
+
+LSTM, GRU, and block-diagonal GRU cells. Transformer encoder blocks. Multi-head attention, target attention, attention pooling, and pointer networks. FiLM conditioning. Auto-regressive action distributions.
+
+### World Models (DreamerV3)
+
+RSSM world model with imagination rollouts. Symlog/twohot distributional encoding. KL balancing with free bits. Sequence replay buffer. Percentile return normalization.
+
+### Game AI Infrastructure
+
+Self-play with opponent pools. League training with agent roles (AlphaStar-style). PFSP matchmaking. Multi-agent shared-weight training. Privileged critic. Goal-conditioned RL. Agent branching. MCTS for drafting. Beta-VAE opponent modeling. Curriculum self-play learning (CSPL).
+
+### Building Blocks
+
+GAE, V-trace, UPGO, replay buffers, multi-head value decomposition, intrinsic rewards, polyak updates, loss functions, orthogonal initialization, global gradient clipping, and logging.
 
 ## Why Burn?
 

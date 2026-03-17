@@ -380,4 +380,129 @@ mod tests {
         let _p_grad = posterior.grad(&grads);
         let _q_grad = prior.grad(&grads);
     }
+
+    // -- Stop-gradient correctness -------------------------------------------
+
+    #[test]
+    fn dynamics_loss_only_updates_prior() {
+        // The dynamics loss uses sg(posterior), so the prior should receive
+        // gradients but the posterior should not (for this term alone).
+        use burn::backend::Autodiff;
+        type AB = Autodiff<NdArray>;
+
+        let dev = <AB as Backend>::Device::default();
+        let posterior = Tensor::<AB, 2>::from_floats(
+            [[2.0, 1.0, 0.5, 0.1]],
+            &dev,
+        )
+        .require_grad();
+        let prior = Tensor::<AB, 2>::from_floats(
+            [[0.5, 0.5, 0.5, 0.5]],
+            &dev,
+        )
+        .require_grad();
+
+        // Compute ONLY the dynamics loss: KL(sg(posterior) || prior)
+        let dyn_kl = categorical_kl(
+            posterior.clone().detach(), // stop-gradient posterior
+            prior.clone(),
+        );
+        let loss = dyn_kl.mean();
+        let grads = loss.backward();
+
+        // Prior should have non-zero gradients (it is being trained)
+        let prior_grad = prior.grad(&grads);
+        assert!(prior_grad.is_some(), "prior should have gradients from dyn loss");
+        let pg_data: Vec<f32> = prior_grad.unwrap().into_data().to_vec().unwrap();
+        let prior_has_nonzero = pg_data.iter().any(|&g| g.abs() > 1e-8);
+        assert!(prior_has_nonzero, "prior gradients should be non-zero, got {:?}", pg_data);
+
+        // Posterior was detached, so it should have no gradient
+        let post_grad = posterior.grad(&grads);
+        assert!(
+            post_grad.is_none(),
+            "posterior should have no gradient in dynamics loss (stop-gradiented)"
+        );
+    }
+
+    #[test]
+    fn representation_loss_only_updates_posterior() {
+        // The representation loss uses sg(prior), so the posterior should receive
+        // gradients but the prior should not (for this term alone).
+        use burn::backend::Autodiff;
+        type AB = Autodiff<NdArray>;
+
+        let dev = <AB as Backend>::Device::default();
+        let posterior = Tensor::<AB, 2>::from_floats(
+            [[2.0, 1.0, 0.5, 0.1]],
+            &dev,
+        )
+        .require_grad();
+        let prior = Tensor::<AB, 2>::from_floats(
+            [[0.5, 0.5, 0.5, 0.5]],
+            &dev,
+        )
+        .require_grad();
+
+        // Compute ONLY the representation loss: KL(posterior || sg(prior))
+        let rep_kl = categorical_kl(
+            posterior.clone(),
+            prior.clone().detach(), // stop-gradient prior
+        );
+        let loss = rep_kl.mean();
+        let grads = loss.backward();
+
+        // Posterior should have non-zero gradients (it is being trained)
+        let post_grad = posterior.grad(&grads);
+        assert!(post_grad.is_some(), "posterior should have gradients from rep loss");
+        let pg_data: Vec<f32> = post_grad.unwrap().into_data().to_vec().unwrap();
+        let post_has_nonzero = pg_data.iter().any(|&g| g.abs() > 1e-8);
+        assert!(post_has_nonzero, "posterior gradients should be non-zero, got {:?}", pg_data);
+
+        // Prior was detached, so it should have no gradient
+        let prior_grad = prior.grad(&grads);
+        assert!(
+            prior_grad.is_none(),
+            "prior should have no gradient in rep loss (stop-gradiented)"
+        );
+    }
+
+    #[test]
+    fn balanced_loss_gives_both_gradients() {
+        // The full balanced loss (dyn + rep) should give gradients to both
+        // posterior and prior, since each appears in one non-detached term.
+        use burn::backend::Autodiff;
+        type AB = Autodiff<NdArray>;
+
+        let dev = <AB as Backend>::Device::default();
+        let posterior = Tensor::<AB, 2>::from_floats(
+            [[2.0, 1.0, 0.5, 0.1], [0.0, 0.0, 3.0, 1.0]],
+            &dev,
+        )
+        .require_grad();
+        let prior = Tensor::<AB, 2>::from_floats(
+            [[0.5, 0.5, 0.5, 0.5], [1.0, -1.0, 0.5, 0.5]],
+            &dev,
+        )
+        .require_grad();
+
+        let config = KlBalanceConfig {
+            dyn_weight: 0.5,
+            rep_weight: 0.1,
+            free_bits: 0.0, // no free bits to ensure gradients flow
+        };
+        let loss = kl_balanced_loss(posterior.clone(), prior.clone(), &config);
+        let grads = loss.backward();
+
+        // Both should have gradients
+        let post_grad = posterior.grad(&grads);
+        assert!(post_grad.is_some(), "posterior should have gradients from balanced loss");
+        let pg: Vec<f32> = post_grad.unwrap().into_data().to_vec().unwrap();
+        assert!(pg.iter().any(|&g| g.abs() > 1e-8), "posterior grads non-zero");
+
+        let prior_grad = prior.grad(&grads);
+        assert!(prior_grad.is_some(), "prior should have gradients from balanced loss");
+        let qg: Vec<f32> = prior_grad.unwrap().into_data().to_vec().unwrap();
+        assert!(qg.iter().any(|&g| g.abs() > 1e-8), "prior grads non-zero");
+    }
 }

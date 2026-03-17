@@ -287,4 +287,128 @@ mod tests {
             "R_0 = {ret0}, expected {expected_r0}"
         );
     }
+
+    // -- Continuation flag tests ----------------------------------------------
+
+    #[test]
+    fn continuation_zero_blocks_future_rewards() {
+        // With continues=[1, 1, 0, 1, 1] (episode ends at step 2),
+        // returns at step 0 must not include rewards from steps 3+.
+        // continue=0 at step 2 means the discount at step 2 is zeroed.
+        let rewards: Vec<Tensor<B, 1>> = [1.0, 1.0, 1.0, 100.0, 100.0]
+            .iter()
+            .map(|&r| Tensor::from_floats([r], &dev()))
+            .collect();
+        let values: Vec<Tensor<B, 1>> = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            .iter()
+            .map(|&v| Tensor::from_floats([v], &dev()))
+            .collect();
+        let continues: Vec<Tensor<B, 1>> = [1.0, 1.0, 0.0, 1.0, 1.0]
+            .iter()
+            .map(|&c| Tensor::from_floats([c], &dev()))
+            .collect();
+
+        let rets = lambda_returns(&rewards, &values, &continues, 0.99, 0.95);
+
+        // Return at step 2: r2 + gamma * c2 * (...) = 1.0 + 0.99 * 0 * ... = 1.0
+        let ret2: f32 = rets[2].clone().into_scalar();
+        assert!(
+            (ret2 - 1.0).abs() < 1e-4,
+            "return at terminal step should equal immediate reward, got {ret2}"
+        );
+
+        // Return at step 0 should NOT include the 100.0 rewards from steps 3-4
+        let ret0: f32 = rets[0].clone().into_scalar();
+        assert!(
+            ret0 < 10.0,
+            "return at step 0 should not include post-terminal rewards, got {ret0}"
+        );
+    }
+
+    #[test]
+    fn all_continues_one_equals_no_termination() {
+        // With all continues=1.0, lambda-returns should propagate all rewards.
+        let rewards: Vec<Tensor<B, 1>> = [1.0, 1.0, 1.0]
+            .iter()
+            .map(|&r| Tensor::from_floats([r], &dev()))
+            .collect();
+        let values: Vec<Tensor<B, 1>> = [0.0, 0.0, 0.0, 0.0]
+            .iter()
+            .map(|&v| Tensor::from_floats([v], &dev()))
+            .collect();
+        let continues: Vec<Tensor<B, 1>> = [1.0, 1.0, 1.0]
+            .iter()
+            .map(|&c| Tensor::from_floats([c], &dev()))
+            .collect();
+
+        let rets = lambda_returns(&rewards, &values, &continues, 0.99, 1.0);
+
+        // With lambda=1, V=0 everywhere:
+        // R_2 = 1 + 0.99*1*0 = 1
+        // R_1 = 1 + 0.99*1*R_2 = 1 + 0.99 = 1.99
+        // R_0 = 1 + 0.99*1*R_1 = 1 + 0.99*1.99 = 2.9701
+        let ret0: f32 = rets[0].clone().into_scalar();
+        let expected = 1.0 + 0.99 * (1.0 + 0.99 * 1.0);
+        assert!(
+            (ret0 - expected).abs() < 1e-3,
+            "R_0 = {ret0}, expected {expected}"
+        );
+    }
+
+    #[test]
+    fn all_continues_zero_gives_immediate_reward() {
+        // With all continues=0.0, every step's return is just the immediate reward.
+        let rewards: Vec<Tensor<B, 1>> = [5.0, 3.0, 7.0]
+            .iter()
+            .map(|&r| Tensor::from_floats([r], &dev()))
+            .collect();
+        let values: Vec<Tensor<B, 1>> = [10.0, 20.0, 30.0, 40.0]
+            .iter()
+            .map(|&v| Tensor::from_floats([v], &dev()))
+            .collect();
+        let continues: Vec<Tensor<B, 1>> = [0.0, 0.0, 0.0]
+            .iter()
+            .map(|&c| Tensor::from_floats([c], &dev()))
+            .collect();
+
+        let rets = lambda_returns(&rewards, &values, &continues, 0.99, 0.95);
+
+        for (t, &expected) in [5.0f32, 3.0, 7.0].iter().enumerate() {
+            let ret: f32 = rets[t].clone().into_scalar();
+            assert!(
+                (ret - expected).abs() < 1e-4,
+                "R_{t} = {ret}, expected {expected} (immediate reward only)"
+            );
+        }
+    }
+
+    #[test]
+    fn lambda_returns_batch_dimension() {
+        // Verify lambda_returns works correctly with batch dimension > 1.
+        let batch = 3;
+        let rewards = vec![
+            Tensor::<B, 1>::from_floats([1.0, 2.0, 3.0], &dev()),
+            Tensor::from_floats([4.0, 5.0, 6.0], &dev()),
+        ];
+        let values = vec![
+            Tensor::<B, 1>::from_floats([0.0, 0.0, 0.0], &dev()),
+            Tensor::from_floats([0.0, 0.0, 0.0], &dev()),
+            Tensor::from_floats([0.0, 0.0, 0.0], &dev()),
+        ];
+        let continues = vec![
+            Tensor::<B, 1>::from_floats([1.0, 1.0, 1.0], &dev()),
+            Tensor::from_floats([1.0, 1.0, 1.0], &dev()),
+        ];
+
+        let rets = lambda_returns(&rewards, &values, &continues, 0.99, 1.0);
+        assert_eq!(rets.len(), 2);
+        for ret in &rets {
+            assert_eq!(ret.dims(), [batch]);
+            let data: Vec<f32> = ret.clone().into_data().to_vec().unwrap();
+            for &v in &data {
+                assert!(v.is_finite(), "return should be finite, got {v}");
+                assert!(v > 0.0, "return should be positive for positive rewards");
+            }
+        }
+    }
 }

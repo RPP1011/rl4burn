@@ -477,4 +477,126 @@ mod tests {
         assert!(ent_data[0] > 0.0);
         assert!(ent_data[1] > 0.0);
     }
+
+    // -- Gradient flow tests --------------------------------------------------
+
+    #[test]
+    fn log_prob_is_differentiable() {
+        // Verify that gradients flow through log_prob back to the input logits.
+        // This confirms the autoregressive distribution is differentiable
+        // end-to-end for policy gradient training.
+        use burn::backend::Autodiff;
+        type AB = Autodiff<NdArray>;
+
+        let device = <AB as Backend>::Device::default();
+        let dist = CompositeDistribution::new(&[3, 4]);
+
+        let logits: Tensor<AB, 2> = Tensor::from_data(
+            TensorData::new(
+                vec![0.5f32, -0.3, 1.0, 0.2, -0.5, 0.8, 0.1],
+                [1, 7],
+            ),
+            &device,
+        )
+        .require_grad();
+
+        let actions = vec![vec![1.0f32, 2.0]];
+        let lp = dist.log_prob(logits.clone(), &actions, None, &device);
+        let loss = lp.sum();
+        let grads = loss.backward();
+
+        let logit_grad = logits.grad(&grads).expect("logits should have gradients");
+        let grad_data: Vec<f32> = logit_grad.into_data().to_vec().unwrap();
+
+        // At least some gradient elements should be non-zero
+        let has_nonzero = grad_data.iter().any(|&g| g.abs() > 1e-8);
+        assert!(
+            has_nonzero,
+            "log_prob gradients should be non-zero, got {:?}",
+            grad_data
+        );
+    }
+
+    #[test]
+    fn entropy_is_differentiable() {
+        // Verify gradients flow through entropy computation.
+        use burn::backend::Autodiff;
+        type AB = Autodiff<NdArray>;
+
+        let device = <AB as Backend>::Device::default();
+        let dist = CompositeDistribution::new(&[3, 4]);
+
+        let logits: Tensor<AB, 2> = Tensor::from_data(
+            TensorData::new(
+                vec![0.5f32, -0.3, 1.0, 0.2, -0.5, 0.8, 0.1],
+                [1, 7],
+            ),
+            &device,
+        )
+        .require_grad();
+
+        let ent = dist.entropy(logits.clone(), None);
+        let loss = ent.sum();
+        let grads = loss.backward();
+
+        let logit_grad = logits.grad(&grads).expect("logits should have gradients");
+        let grad_data: Vec<f32> = logit_grad.into_data().to_vec().unwrap();
+        let has_nonzero = grad_data.iter().any(|&g| g.abs() > 1e-8);
+        assert!(
+            has_nonzero,
+            "entropy gradients should be non-zero, got {:?}",
+            grad_data
+        );
+    }
+
+    #[test]
+    fn log_prob_gradient_affects_all_heads() {
+        // Verify that perturbing logits for each head changes the joint log_prob.
+        // This catches gradient disconnection between heads.
+        let dist = CompositeDistribution::new(&[3, 4]);
+        let device = device();
+
+        let base_logits_data = vec![0.5f32, -0.3, 1.0, 0.2, -0.5, 0.8, 0.1];
+        let actions = vec![vec![1.0f32, 2.0]];
+
+        let base_logits: Tensor<B, 2> = Tensor::from_data(
+            TensorData::new(base_logits_data.clone(), [1, 7]),
+            &device,
+        );
+        let base_lp: f32 = dist
+            .log_prob(base_logits, &actions, None, &device)
+            .into_data()
+            .to_vec()
+            .unwrap()[0];
+
+        // Perturb head 0 logits (indices 0..3)
+        let mut perturbed = base_logits_data.clone();
+        perturbed[0] += 1.0;
+        let perturbed_logits: Tensor<B, 2> =
+            Tensor::from_data(TensorData::new(perturbed, [1, 7]), &device);
+        let perturbed_lp: f32 = dist
+            .log_prob(perturbed_logits, &actions, None, &device)
+            .into_data()
+            .to_vec()
+            .unwrap()[0];
+        assert!(
+            (perturbed_lp - base_lp).abs() > 1e-4,
+            "perturbing head 0 should change log_prob"
+        );
+
+        // Perturb head 1 logits (indices 3..7)
+        let mut perturbed = base_logits_data;
+        perturbed[4] += 1.0;
+        let perturbed_logits: Tensor<B, 2> =
+            Tensor::from_data(TensorData::new(perturbed, [1, 7]), &device);
+        let perturbed_lp: f32 = dist
+            .log_prob(perturbed_logits, &actions, None, &device)
+            .into_data()
+            .to_vec()
+            .unwrap()[0];
+        assert!(
+            (perturbed_lp - base_lp).abs() > 1e-4,
+            "perturbing head 1 should change log_prob"
+        );
+    }
 }

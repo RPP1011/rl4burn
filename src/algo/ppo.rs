@@ -506,3 +506,135 @@ where
 
     (model, stats)
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use burn::backend::NdArray;
+    use burn::prelude::*;
+    use burn::tensor::activation::relu;
+    use burn::tensor::TensorData;
+
+    type B = NdArray;
+
+    fn dev() -> <B as Backend>::Device {
+        Default::default()
+    }
+
+    /// Helper: compute dual-clip surrogate for given ratio, advantage, eps, c.
+    /// Returns the per-element dual-clip objective value.
+    fn dual_clip_value(ratio_val: f32, adv_val: f32, eps: f32, c: f32) -> f32 {
+        let ratio = Tensor::<B, 1>::from_data(TensorData::new(vec![ratio_val], [1]), &dev());
+        let adv = Tensor::<B, 1>::from_data(TensorData::new(vec![adv_val], [1]), &dev());
+
+        let surr1 = ratio.clone() * adv.clone();
+        let surr2 = ratio.clamp(1.0 - eps, 1.0 + eps) * adv.clone();
+        let min_surr = surr2.clone() - relu(surr2 - surr1);
+
+        let neg_adv = adv.neg().clamp_min(0.0).neg(); // min(adv, 0)
+        let dual_floor = neg_adv * c;
+        let dual_surr = min_surr.clone() + relu(dual_floor - min_surr);
+
+        dual_surr.into_data().to_vec::<f32>().unwrap()[0]
+    }
+
+    /// Helper: compute standard clip surrogate (no dual clip).
+    fn standard_clip_value(ratio_val: f32, adv_val: f32, eps: f32) -> f32 {
+        let ratio = Tensor::<B, 1>::from_data(TensorData::new(vec![ratio_val], [1]), &dev());
+        let adv = Tensor::<B, 1>::from_data(TensorData::new(vec![adv_val], [1]), &dev());
+
+        let surr1 = ratio.clone() * adv.clone();
+        let surr2 = ratio.clamp(1.0 - eps, 1.0 + eps) * adv;
+        let min_surr = surr2.clone() - relu(surr2 - surr1);
+
+        min_surr.into_data().to_vec::<f32>().unwrap()[0]
+    }
+
+    // -- Dual-clip PPO exact worked cases ----------------------------------------
+
+    #[test]
+    fn dual_clip_positive_advantage_is_standard_ppo() {
+        // When adv > 0, dual clip should NOT activate.
+        // ratio=1.5, adv=2.0, eps=0.2, c=3
+        // surr1 = 1.5 * 2.0 = 3.0
+        // surr2 = clamp(1.5, 0.8, 1.2) * 2.0 = 1.2 * 2.0 = 2.4
+        // min_surr = 2.4 (standard clip)
+        // dual_floor = c * min(adv, 0) = 3 * 0 = 0
+        // max(2.4, 0) = 2.4 (standard PPO unchanged)
+        let result = dual_clip_value(1.5, 2.0, 0.2, 3.0);
+        let standard = standard_clip_value(1.5, 2.0, 0.2);
+
+        assert!(
+            (result - standard).abs() < 1e-5,
+            "Dual clip should not activate for positive advantages"
+        );
+        assert!((result - 2.4).abs() < 1e-5, "Expected 2.4, got {result}");
+    }
+
+    #[test]
+    fn dual_clip_activates_for_negative_advantage_extreme_ratio() {
+        // ratio=5.0, adv=-0.1, eps=0.2, c=3
+        // surr1 = 5.0 * -0.1 = -0.5
+        // surr2 = clamp(5.0, 0.8, 1.2) * -0.1 = 1.2 * -0.1 = -0.12
+        // min_surr = min(-0.5, -0.12) = -0.5
+        // dual_floor = 3 * min(-0.1, 0) = 3 * -0.1 = -0.3
+        // max(-0.5, -0.3) = -0.3  <-- DUAL CLIP ACTIVATES
+        let result = dual_clip_value(5.0, -0.1, 0.2, 3.0);
+        assert!(
+            (result - (-0.3)).abs() < 1e-5,
+            "Dual clip should raise objective to -0.3, got {result}"
+        );
+    }
+
+    #[test]
+    fn dual_clip_ratio_one_equals_advantage() {
+        // When ratio=1, output = advantage regardless of c
+        for adv_val in [-2.0f32, -0.5, 0.0, 0.5, 2.0] {
+            let result = dual_clip_value(1.0, adv_val, 0.2, 3.0);
+            assert!(
+                (result - adv_val).abs() < 1e-5,
+                "At ratio=1, output should equal advantage. adv={adv_val}, got={result}"
+            );
+        }
+    }
+
+    #[test]
+    fn dual_clip_standard_wins_for_small_ratio_negative_adv() {
+        // ratio=0.01, adv=-0.5, eps=0.2, c=3
+        // surr1 = 0.01 * -0.5 = -0.005
+        // surr2 = clamp(0.01, 0.8, 1.2) * -0.5 = 0.8 * -0.5 = -0.4
+        // min_surr = min(-0.005, -0.4) = -0.4
+        // dual_floor = 3 * -0.5 = -1.5
+        // max(-0.4, -1.5) = -0.4 (standard clip wins, dual not needed)
+        let result = dual_clip_value(0.01, -0.5, 0.2, 3.0);
+        assert!(
+            (result - (-0.4)).abs() < 1e-5,
+            "Standard clip should win, got {result}"
+        );
+    }
+
+    #[test]
+    fn dual_clip_negative_adv_output_bounded() {
+        // For A < 0, output should be in [c*A, 0]
+        let c = 3.0f32;
+        let eps = 0.2f32;
+
+        for ratio_val in [0.01f32, 0.5, 1.0, 1.5, 5.0, 10.0] {
+            for adv_val in [-2.0f32, -1.0, -0.5, -0.1] {
+                let result = dual_clip_value(ratio_val, adv_val, eps, c);
+                let lower = c * adv_val;
+                assert!(
+                    result >= lower - 1e-5,
+                    "Output {result} below lower bound {lower} for ratio={ratio_val}, adv={adv_val}"
+                );
+                assert!(
+                    result <= 1e-5,
+                    "Output {result} above 0 for ratio={ratio_val}, adv={adv_val}"
+                );
+            }
+        }
+    }
+}
