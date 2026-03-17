@@ -47,6 +47,10 @@ pub use algo::ppo::{ppo_collect, ppo_update, PpoConfig, PpoRollout, PpoStats};
 pub use algo::ppo_masked::{
     masked_ppo_collect, masked_ppo_update, MaskedActorCritic, MaskedPpoRollout,
 };
+pub use algo::distillation::{distillation_loss, value_distillation_loss, DistillationConfig};
+pub use algo::privileged_critic::{make_critic_input, PrivilegedActorCritic};
+pub use algo::self_play::{branch_agent, SelfPlayPool};
+pub use algo::z_conditioning::{z_reward, ZConditioning, ZConditioningConfig};
 
 // Action distributions
 pub use nn::autoregressive::{ActionHead, CompositeDistribution};
@@ -80,6 +84,7 @@ pub use nn::polyak::polyak_update;
 // Data collection
 pub use collect::advantage::normalize;
 pub use collect::gae::gae;
+pub use collect::intrinsic::{combine_rewards, CountBasedReward, EntropyReductionReward, IntrinsicReward};
 pub use collect::percentile_normalize::PercentileNormalizer;
 pub use collect::replay::ReplayBuffer;
 pub use collect::upgo::upgo as upgo_advantages;
