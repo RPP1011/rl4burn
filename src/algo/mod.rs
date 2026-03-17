@@ -1,4 +1,5 @@
 pub mod behavioral_cloning;
+pub mod cspl;
 pub mod distillation;
 pub mod dqn;
 pub mod league;

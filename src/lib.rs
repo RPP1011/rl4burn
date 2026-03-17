@@ -49,6 +49,7 @@ pub use algo::ppo_masked::{
 };
 pub use algo::behavioral_cloning::{bc_loss_discrete, bc_loss_multi_head, bc_step};
 pub use algo::distillation::{distillation_loss, value_distillation_loss, DistillationConfig};
+pub use algo::cspl::{CsplConfig, CsplPhase, CsplPipeline};
 pub use algo::league::{AgentRole, League, LeagueAgentConfig};
 pub use algo::multi_agent::{batch_multi_agent_obs, broadcast_team_reward, unbatch_actions, MultiAgentRolloutData};
 pub use algo::pfsp::{PfspConfig, PfspMatchmaking, PlayerRecord};
@@ -77,6 +78,7 @@ pub use nn::loss::{policy_loss_continuous, policy_loss_discrete, value_loss};
 pub use nn::rnn::{
     BlockGruCell, BlockGruCellConfig, GruCell, GruCellConfig, LstmCell, LstmCellConfig, LstmState,
 };
+pub use nn::rssm::{Rssm, RssmConfig, RssmState};
 pub use nn::policy::{greedy_action, DiscreteAcOutput, DiscreteActorCritic};
 pub use nn::symlog::{symexp, symlog, TwohotEncoder};
 
@@ -91,6 +93,7 @@ pub use collect::gae::gae;
 pub use collect::intrinsic::{combine_rewards, CountBasedReward, EntropyReductionReward, IntrinsicReward};
 pub use collect::percentile_normalize::PercentileNormalizer;
 pub use collect::replay::ReplayBuffer;
+pub use collect::sequence_replay::{SequenceReplayBuffer, SequenceStep};
 pub use collect::upgo::upgo as upgo_advantages;
 pub use collect::vtrace::vtrace_targets;
 

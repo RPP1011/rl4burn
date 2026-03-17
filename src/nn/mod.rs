@@ -10,4 +10,5 @@ pub mod multi_head_value;
 pub mod policy;
 pub mod polyak;
 pub mod rnn;
+pub mod rssm;
 pub mod symlog;
