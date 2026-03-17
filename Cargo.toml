@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 description = "Reinforcement learning algorithms for the Burn ML framework"
 license = "MIT"
+repository = "https://github.com/RPP1011/rl4burn"
+homepage = "https://github.com/RPP1011/rl4burn"
+keywords = ["reinforcement-learning", "burn", "ppo", "dqn", "game-ai"]
+categories = ["science", "game-development"]
+readme = "README.md"
 
 [dependencies]
 burn = { version = "0.20", default-features = false, features = ["std"] }

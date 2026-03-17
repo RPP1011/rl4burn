@@ -4,6 +4,9 @@ Reinforcement learning algorithms for the [Burn](https://burn.dev) ML framework.
 
 Write your algorithm once with `B: AutodiffBackend` and run it on WGPU, CUDA, NdArray, or LibTorch — no reimplementation per backend.
 
+### Note
+The book (and this repo to a lesser extent) is way too specific to supporting my [game AI project](https://github.com/RPP1011/super-duper-octo-spork). You may get some use out of it regardless, but I will work on making those more general later.
+
 ## Algorithms
 
 | Algorithm | Type | Trait | Status |
