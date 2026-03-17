@@ -4,3 +4,5 @@
 /runs
 /checkpoints
 /wandb
+/.claude
+/plans
