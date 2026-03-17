@@ -83,6 +83,7 @@ use burn::backend::{Autodiff, NdArray};
 use burn::module::AutodiffModule;
 use burn::optim::AdamConfig;
 use rl4burn::ppo::{ppo_collect, ppo_update, PpoConfig};
+use rl4burn::{Loggable, Logger, PrintLogger};
 
 type AB = Autodiff<NdArray>;
 
@@ -92,6 +93,7 @@ let mut rng = rand::rngs::SmallRng::seed_from_u64(42);
 let mut model: ActorCritic<AB> = ActorCritic::new(&device);
 let mut optim = AdamConfig::new().with_epsilon(1e-5).init();
 let config = PpoConfig::default();
+let mut logger = PrintLogger::new(0);
 
 // Episode return accumulator — persists across rollouts
 let mut ep_acc = vec![0.0f32; n_envs];
@@ -115,17 +117,24 @@ for iter in 0..100 {
     );
     model = new_model;
 
-    // Log completed episode returns
-    for &ret in &rollout.episode_returns {
-        println!("iter {iter}: episode_return={ret:.0}");
+    // Log training stats
+    let step = (iter + 1) as u64 * (config.n_steps * n_envs) as u64;
+    stats.log(&mut logger, step);
+
+    if !rollout.episode_returns.is_empty() {
+        let avg = rollout.episode_returns.iter().sum::<f32>()
+            / rollout.episode_returns.len() as f32;
+        logger.log_scalar("rollout/avg_return", avg as f64, step);
     }
 }
+logger.flush();
 ```
 
 Key points:
 - `model.valid()` strips the autodiff layer for efficient inference during collection.
 - `ep_acc` tracks per-env cumulative reward across rollout boundaries. Without this, episodes longer than `n_steps` would have their returns split.
 - `ppo_update` returns the updated model (Burn modules are moved through optimizers, not mutated in place).
+- `stats.log(...)` uses the `Loggable` trait to log all PPO metrics. See the [Logging](../building-blocks/logging.md) chapter for details on logger setup.
 
 ## Run it
 

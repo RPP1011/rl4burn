@@ -28,6 +28,7 @@
 - [Loss Functions](./building-blocks/losses.md)
 - [Orthogonal Initialization](./building-blocks/init.md)
 - [Global Gradient Clipping](./building-blocks/grad-clip.md)
+- [Logging](./building-blocks/logging.md)
 
 # Burn Compatibility
 
