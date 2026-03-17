@@ -1,23 +1,18 @@
 # rl4burn
 
-Reinforcement learning algorithms for the [Burn](https://burn.dev) ML framework.
+Reinforcement learning library for the [Burn](https://burn.dev) deep learning framework.
 
-Write your algorithm once with `B: AutodiffBackend` and run it on WGPU, CUDA, NdArray, or LibTorch — no reimplementation per backend.
-
-### Note
-The book (and this repo to a lesser extent) is way too specific to supporting my [game AI project](https://github.com/RPP1011/super-duper-octo-spork). You may get some use out of it regardless, but I will work on making those more general later.
-Also some parts are just wrong or no longer reflect the current state of the repo, like the rest of this README :).
+Write your model once with `B: Backend` and train it on **NdArray** (CPU), **WGPU** (GPU), **CUDA**, or **LibTorch** with zero code changes.
 
 ## Algorithms
 
-| Algorithm | Type | Trait | Status |
-|-----------|------|-------|--------|
-| **PPO** | On-policy, actor-critic | `DiscreteActorCritic` | Solves CartPole in <1s |
-| **DQN** | Off-policy, value-based | `QNetwork` | Solves CartPole in ~9s |
+| Algorithm | Action space | Model trait | Status |
+|-----------|-------------|-------------|--------|
+| **PPO** (discrete) | `Discrete` | `DiscreteActorCritic` | Solves CartPole in <1s |
+| **PPO** (masked / multi-discrete / continuous) | `Discrete`, `MultiDiscrete`, `Continuous` | `MaskedActorCritic` | Solves Pendulum, GridWorld |
+| **DQN** | `Discrete` | `QNetwork` | Solves CartPole in ~9s |
 
 ## Quick start
-
-Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
@@ -26,7 +21,7 @@ burn = { version = "0.20", features = ["std", "ndarray", "autodiff"] }
 rand = "0.9"
 ```
 
-### PPO on CartPole
+### PPO on CartPole (discrete)
 
 ```rust
 use burn::backend::{Autodiff, NdArray};
@@ -41,7 +36,6 @@ use rl4burn::policy::{DiscreteAcOutput, DiscreteActorCritic};
 use rl4burn::ppo::{ppo_collect, ppo_update, PpoConfig};
 use rl4burn::vec_env::SyncVecEnv;
 
-// 1. Define your model
 #[derive(Module, Debug)]
 struct ActorCritic<B: Backend> {
     actor_fc1: Linear<B>,
@@ -65,7 +59,6 @@ impl<B: Backend> ActorCritic<B> {
     }
 }
 
-// 2. Implement the trait
 impl<B: Backend> DiscreteActorCritic<B> for ActorCritic<B> {
     fn forward(&self, obs: Tensor<B, 2>) -> DiscreteAcOutput<B> {
         let a = self.actor_fc1.forward(obs.clone()).tanh();
@@ -80,7 +73,6 @@ impl<B: Backend> DiscreteActorCritic<B> for ActorCritic<B> {
     }
 }
 
-// 3. Train
 type AB = Autodiff<NdArray>;
 
 fn main() {
@@ -115,145 +107,101 @@ fn main() {
 }
 ```
 
+### PPO with continuous actions (Pendulum)
+
+```rust
+use rl4burn::{
+    ActionDist, LogStdMode, MaskedActorCritic,
+    masked_ppo_collect, masked_ppo_update,
+    PpoConfig,
+};
+use rl4burn::envs::Pendulum;
+
+// ActionDist handles sampling, log-prob, and entropy for any action space
+let action_dist = ActionDist::Continuous {
+    action_dim: 1,
+    log_std_mode: LogStdMode::ModelOutput,
+};
+
+// Your model implements MaskedActorCritic instead of DiscreteActorCritic
+impl<B: Backend> MaskedActorCritic<B> for ContinuousAgent<B> {
+    fn forward(&self, obs: Tensor<B, 2>) -> (Tensor<B, 2>, Tensor<B, 1>) {
+        // Return (logits [batch, n_logits], values [batch])
+        // For Continuous/ModelOutput: logits = [means, log_stds]
+        let h = self.encoder.forward(obs);
+        let logits = self.policy_head.forward(h.clone());   // [batch, 2]
+        let values = self.value_head.forward(h).squeeze(1);  // [batch]
+        (logits, values)
+    }
+}
+```
+
+### PPO with action masking (GridWorld)
+
+```rust
+use rl4burn::ActionDist;
+use rl4burn::envs::GridWorld;
+
+// Multi-discrete: two independent dimensions, 3 choices each
+let action_dist = ActionDist::MultiDiscrete(vec![3, 3]);
+
+// Environments provide masks via the Env trait
+impl Env for MyGameEnv {
+    // ...
+    fn action_mask(&self) -> Option<Vec<f32>> {
+        let mut mask = vec![0.0; 49];  // 11 action types + 30 targets + 8 abilities
+        // 1.0 = valid, 0.0 = invalid
+        for i in 0..11 { mask[i] = 1.0; }
+        for (i, unit) in self.enemies.iter().enumerate() {
+            if unit.alive { mask[11 + i] = 1.0; }
+        }
+        Some(mask)
+    }
+}
+```
+
 ### DQN on CartPole
 
 ```rust
-use burn::backend::{Autodiff, NdArray};
-use burn::module::{AutodiffModule, Module};
-use burn::nn::{Linear, LinearConfig};
-use burn::optim::AdamConfig;
-use burn::prelude::*;
-use burn::tensor::activation::relu;
-use rand::SeedableRng;
-
 use rl4burn::dqn::*;
-use rl4burn::env::Env;
 use rl4burn::envs::CartPole;
 use rl4burn::polyak::polyak_update;
 use rl4burn::replay::ReplayBuffer;
 
-// 1. Define your Q-network
-#[derive(Module, Debug)]
-struct QNet<B: Backend> {
-    fc1: Linear<B>,
-    fc2: Linear<B>,
-    q_head: Linear<B>,
-}
+let config = DqnConfig::default();
+let mut buffer = ReplayBuffer::new(config.buffer_capacity, rng);
 
-impl<B: Backend> QNetwork<B> for QNet<B> {
-    fn q_values(&self, obs: Tensor<B, 2>) -> Tensor<B, 2> {
-        let h = relu(self.fc1.forward(obs));
-        let h = relu(self.fc2.forward(h));
-        self.q_head.forward(h)
-    }
-}
+for step in 0..50_000 {
+    let eps = epsilon_schedule(&config, step);
+    let action = epsilon_greedy::<NdArray, _>(&online.valid(), &obs, 2, eps, &device, &mut rng);
 
-// 2. Train
-type AB = Autodiff<NdArray>;
+    let result = env.step(action);
+    buffer.extend(std::iter::once(Transition {
+        obs: obs.clone(), action: action as i32,
+        reward: result.reward, next_obs: result.observation.clone(),
+        done: result.done(),
+    }));
 
-fn main() {
-    let device = burn::backend::ndarray::NdArrayDevice::Cpu;
-    let mut rng = rand::rngs::SmallRng::seed_from_u64(42);
-    let mut env = CartPole::new(rand::rngs::SmallRng::seed_from_u64(0));
-    let config = DqnConfig::default();
-
-    let mut online: QNet<AB> = QNet {
-        fc1: LinearConfig::new(4, 64).init(&device),
-        fc2: LinearConfig::new(64, 64).init(&device),
-        q_head: LinearConfig::new(64, 2).init(&device),
-    };
-    let mut target = online.clone();
-    let mut optim = AdamConfig::new().init();
-    let mut buffer = ReplayBuffer::new(config.buffer_capacity, rand::rngs::SmallRng::seed_from_u64(42));
-    let mut obs = env.reset();
-
-    for step in 0..50_000 {
-        let eps = epsilon_schedule(&config, step);
-        let action = {
-            let inner = online.valid();
-            epsilon_greedy::<NdArray, _>(&inner, &obs, 2, eps, &device, &mut rng)
-        };
-
-        let result = env.step(action);
-        buffer.extend(std::iter::once(Transition {
-            obs: obs.clone(), action: action as i32,
-            reward: result.reward, next_obs: result.observation.clone(),
-            done: result.done(),
-        }));
-        obs = if result.done() { env.reset() } else { result.observation };
-
-        if step >= config.learning_starts && buffer.len() >= config.batch_size {
-            (online, _) = dqn_update(online, &target, &mut optim, &mut buffer, &config, &device);
-            if step % 250 == 0 {
-                target = polyak_update(target, &online, 1.0);
-            }
+    if step >= config.learning_starts && buffer.len() >= config.batch_size {
+        (online, _) = dqn_update(online, &target, &mut optim, &mut buffer, &config, &device);
+        if step % 250 == 0 {
+            target = polyak_update(target, &online, 1.0);
         }
     }
 }
 ```
 
-## Logging & visualization
+## Environments
 
-Log training metrics to TensorBoard, save runs as JSONL, or record agent behavior as GIFs:
+| Environment | Observation | Action | Notes |
+|-------------|------------|--------|-------|
+| **CartPole** | `[x, x_dot, θ, θ_dot]` | Discrete(2) | Classic balance task, 500-step truncation |
+| **Pendulum** | `[cos(θ), sin(θ), θ_dot]` | Continuous(1) | Swing-up with torque in [-2, 2] |
+| **GridWorld** | `[agent_x, agent_y, goal_x, goal_y]` | Discrete(4) | 7x7 grid with boundary masking |
 
-```bash
-# Train PPO with TensorBoard logging, then view in browser
-cargo run --release --example ppo_cartpole --features "ndarray,tensorboard"
-tensorboard --logdir runs/
+All environments implement the `Env` trait. CartPole and GridWorld implement `Renderable` for GIF recording.
 
-# Export training metrics as JSONL and pipe to Weights & Biases
-cargo run --release --example ppo_cartpole --features "ndarray,json-log" 2>&1 \
-  | python scripts/wandb_bridge.py          # requires `wandb login` first
-  # or: | python scripts/wandb_bridge.py --offline  # no account needed
-```
-
-Use the `Loggable` trait to log stats from any algorithm in one line:
-
-```rust,ignore
-use rl4burn::{Loggable, PrintLogger};
-
-let mut logger = PrintLogger::new(0);
-let (model, stats) = ppo_update(model, &mut optim, &rollout, &config, lr, &device, &mut rng);
-stats.log(&mut logger, step);
-```
-
-Save and load model weights with Burn's recorder system:
-
-```rust,ignore
-use burn::record::{CompactRecorder, Recorder};
-
-// Save
-model.save_file("checkpoints/ppo_cartpole", &CompactRecorder::new()).unwrap();
-
-// Load
-let model = ActorCritic::new(&device)
-    .load_file("checkpoints/ppo_cartpole", &CompactRecorder::new(), &device)
-    .unwrap();
-```
-
-Optional feature flags — the core crate has zero logging dependencies:
-
-| Feature | What you get |
-|---------|-------------|
-| `tensorboard` | TFEvent files for `tensorboard --logdir` |
-| `json-log` | JSONL output for wandb/mlflow/custom dashboards |
-| `video` | `write_gif()` + `Renderable::render()` for episode recording |
-
-## Architecture
-
-```
-rl4burn
-  Algorithms:     ppo, dqn
-  Env:            Env trait, SyncVecEnv, EpisodeStats/RewardClip/NormalizeObservation wrappers
-  Environments:   CartPole
-  Building blocks: GAE, V-trace, replay buffer, polyak updates, loss functions,
-                   advantage normalization, orthogonal init, global gradient clipping
-  Spaces:         Discrete, Box, MultiDiscrete
-```
-
-### Core traits
-
-**`Env`** — Gymnasium-style environment with `reset()` / `step()`, separate `terminated` / `truncated` flags:
+To use your own environment, implement `Env`:
 
 ```rust
 pub trait Env {
@@ -263,68 +211,138 @@ pub trait Env {
     fn step(&mut self, action: Self::Action) -> Step<Self::Observation>;
     fn observation_space(&self) -> Space;
     fn action_space(&self) -> Space;
+    fn action_mask(&self) -> Option<Vec<f32>> { None }  // optional
 }
 ```
 
-**`DiscreteActorCritic`** — Actor-critic model for PPO (logits + values in one forward pass):
+### Wrappers
+
+| Wrapper | Description |
+|---------|-------------|
+| `EpisodeStats` | Tracks per-episode reward and length |
+| `NormalizeObservation` | Running mean/std observation normalization |
+| `NormalizeReward` | Reward normalization with discounted return tracking |
+| `DiscreteEnvAdapter` | Bridges discrete (`Action = usize`) envs to the masked PPO pipeline (`Action = Vec<f32>`) |
+
+## Action distributions
+
+`ActionDist` unifies sampling, log-probability, and entropy computation across all action space types:
 
 ```rust
-pub trait DiscreteActorCritic<B: Backend> {
-    fn forward(&self, obs: Tensor<B, 2>) -> DiscreteAcOutput<B>;
+pub enum ActionDist {
+    Discrete(usize),              // Single categorical
+    MultiDiscrete(Vec<usize>),    // Independent categoricals
+    Continuous {                   // Diagonal Gaussian
+        action_dim: usize,
+        log_std_mode: LogStdMode, // ModelOutput or Separate
+    },
 }
 ```
 
-**`QNetwork`** — Q-value network for DQN:
+Masks are `Option<Tensor<B, 2>>` with shape `[batch, n_logits]` (1.0 = valid, 0.0 = invalid), applied before softmax. Continuous distributions clamp log_std to [-5, 2] for numerical stability.
 
-```rust
-pub trait QNetwork<B: Backend> {
-    fn q_values(&self, obs: Tensor<B, 2>) -> Tensor<B, 2>;
-}
-```
+## Building blocks
 
-### PPO details
-
-`ppo_collect` and `ppo_update` are separate functions — you own the training loop:
-
-- **Per-minibatch advantage normalization** (matches CleanRL)
-- **Value loss clipping** (configurable)
-- **Global gradient norm clipping** via `clip_grad_norm` (PyTorch-compatible, not Burn's per-parameter clipping)
-- **LR annealing** via the `current_lr` parameter
-- **Episode return tracking** built into `ppo_collect` via the `episode_returns_acc` accumulator
-
-Default hyperparameters match [CleanRL's ppo.py](https://github.com/vwxyzjn/cleanrl/blob/master/cleanrl/ppo.py).
-
-### DQN details
-
-- **Experience replay** via `ReplayBuffer`
-- **Target network** via `polyak_update` (hard or soft updates)
-- **Epsilon-greedy** exploration with linear annealing
-- Caller owns the training loop and target update schedule
-
-### Utilities
+### Core RL
 
 | Module | Description |
 |--------|-------------|
-| `init::orthogonal_linear` | Orthogonal weight initialization (CleanRL's `layer_init`) |
-| `clip::clip_grad_norm` | Global gradient norm clipping (matches PyTorch's `clip_grad_norm_`) |
 | `gae::gae` | Generalized Advantage Estimation |
 | `vtrace::vtrace_targets` | V-trace off-policy correction |
+| `replay::ReplayBuffer` | FIFO replay buffer with uniform sampling |
 | `polyak::polyak_update` | Soft/hard target network updates |
+| `advantage::normalize` | Advantage normalization with clamping |
+| `percentile_normalize` | Percentile-based return normalization (DreamerV3-style) |
+
+### Neural network utilities
+
+| Module | Description |
+|--------|-------------|
+| `init::orthogonal_linear` | Orthogonal weight init (CleanRL's `layer_init`) |
+| `clip::clip_grad_norm` | Global gradient norm clipping (PyTorch-compatible) |
 | `loss::value_loss` | Huber value loss |
 | `loss::policy_loss_discrete` | REINFORCE policy gradient |
 | `loss::policy_loss_continuous` | Advantage-weighted regression |
-| `advantage::normalize` | Advantage normalization with clamping |
-| `replay::ReplayBuffer` | Uniform replay buffer with trajectory grouping |
+| `nn::dist::ActionDist` | Action distributions with masking |
 
-## Burn compatibility notes
+### Attention and sequence models
 
-This crate works around several Burn 0.20 behaviors:
+| Module | Description |
+|--------|-------------|
+| `nn::attention` | Multi-head attention, attention-based pooling |
+| `nn::transformer` | Transformer encoder blocks with LayerNorm |
+| `nn::rnn` | LSTM cells, GRU cells, block-diagonal GRU |
+| `nn::pointer` | Pointer networks for entity selection |
+| `nn::film` | Feature-wise Linear Modulation conditioning |
 
-1. **`Param::initialized` does not set `require_grad`**: Custom weight initialization must use `Param::from_data` + `load_record`, not `Param::initialized(id, tensor)`. The latter creates parameters invisible to autodiff. `orthogonal_linear` handles this correctly.
+### Model-based RL (DreamerV3 components)
 
-2. **Gradient clipping is per-parameter**: Burn's `GradientClippingConfig::Norm` clips each parameter tensor independently. PyTorch's `clip_grad_norm_` clips the global norm across all parameters. Use `clip::clip_grad_norm` for PyTorch-compatible behavior.
+| Module | Description |
+|--------|-------------|
+| `nn::rssm` | Recurrent State-Space Model |
+| `nn::symlog` | Symlog transform and twohot distributional predictions |
+| `nn::kl_balance` | KL balancing with free bits |
+| `nn::vae` | Variational autoencoder |
+| `algo::imagination` | Imagination rollout engine with lambda-returns |
+| `collect::sequence_replay` | Episode-based sequence replay buffer |
 
-3. **`mask_where` gradient flow**: Burn's autodiff may not propagate gradients through the `source` argument of `mask_where`. Use arithmetic alternatives like `min(a,b) = b - relu(b - a)` or `max(a,b) = a + relu(b - a)`.
+### Multi-agent and self-play
+
+| Module | Description |
+|--------|-------------|
+| `algo::self_play` | Self-play pool with agent snapshots |
+| `algo::pfsp` | Prioritized Fictitious Self-Play matchmaking |
+| `algo::league` | Multi-agent league management |
+| `algo::multi_agent` | Batched multi-agent observation/action utilities |
+| `algo::privileged_critic` | Asymmetric actor-critic with privileged information |
+
+### Training pipelines
+
+| Module | Description |
+|--------|-------------|
+| `algo::behavioral_cloning` | Behavioral cloning from demonstrations |
+| `algo::distillation` | Policy and value distillation |
+| `algo::cspl` | Curriculum Self-Play Learning pipeline |
+| `algo::z_conditioning` | Goal-conditioned RL with strategy embeddings |
+
+## Logging and visualization
+
+Log training metrics to TensorBoard, JSONL, or stdout. Record agent behavior as GIFs.
+
+```bash
+cargo run --release --example ppo_cartpole --features "ndarray,tensorboard"
+tensorboard --logdir runs/
+
+cargo run --release --example ppo_cartpole --features "ndarray,json-log" 2>&1 \
+  | python scripts/wandb_bridge.py
+```
+
+```rust
+use rl4burn::{Loggable, PrintLogger};
+
+let mut logger = PrintLogger::new(0);
+stats.log(&mut logger, step);  // PpoStats, DqnStats, etc. implement Loggable
+```
+
+Optional feature flags (core crate has zero logging dependencies):
+
+| Feature | What you get |
+|---------|-------------|
+| `tensorboard` | TFEvent files for `tensorboard --logdir` |
+| `json-log` | JSONL output for wandb/mlflow/custom dashboards |
+| `video` | `write_gif()` + `Renderable::render()` for episode recording |
+
+## Model saving and loading
+
+```rust
+use burn::record::{CompactRecorder, Recorder};
+
+model.save_file("checkpoints/ppo_cartpole", &CompactRecorder::new()).unwrap();
+
+let model = ActorCritic::new(&device)
+    .load_file("checkpoints/ppo_cartpole", &CompactRecorder::new(), &device)
+    .unwrap();
+```
 
 ## Running tests
 
@@ -332,12 +350,26 @@ This crate works around several Burn 0.20 behaviors:
 cargo test --release
 ```
 
-The test suite includes integration tests that train PPO and DQN on CartPole to convergence:
+The test suite trains agents to convergence across multiple action space types:
 
 ```
-test ppo_solves_cartpole ... ok    (0.7s, asserts avg_return > 400)
-test dqn_solves_cartpole ... ok    (9s, asserts avg_return > 200)
+test ppo_solves_cartpole         ... ok  (~0.7s, discrete PPO)
+test ppo_masked_cartpole         ... ok  (~0.8s, MaskedActorCritic adapter)
+test ppo_multi_discrete          ... ok  (~1s, MultiDiscrete with boundary masking)
+test ppo_continuous_pendulum     ... ok  (~30s, continuous PPO with normalization)
+test dqn_solves_cartpole         ... ok  (~9s, DQN with experience replay)
+test gradient_flow               ... ok  (<1s, autodiff through orthogonal init)
 ```
+
+## Burn compatibility notes
+
+This crate works around several Burn 0.20 behaviors:
+
+1. **`Param::initialized` does not set `require_grad`**: Custom weight initialization must use `Param::from_data` + `load_record`, not `Param::initialized(id, tensor)`. `orthogonal_linear` handles this correctly.
+
+2. **Gradient clipping is per-parameter**: Burn's `GradientClippingConfig::Norm` clips each parameter tensor independently. Use `clip::clip_grad_norm` for PyTorch-compatible global norm clipping.
+
+3. **`mask_where` gradient flow**: Burn's autodiff may not propagate gradients through `mask_where`'s source argument. Use arithmetic alternatives like `min(a,b) = b - relu(b - a)`.
 
 ## License
 
