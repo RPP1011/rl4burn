@@ -188,6 +188,52 @@ fn main() {
 }
 ```
 
+## Logging & visualization
+
+Log training metrics to TensorBoard, save runs as JSONL, or record agent behavior as GIFs:
+
+```bash
+# Train PPO with TensorBoard logging, then view in browser
+cargo run --release --example ppo_cartpole --features "ndarray,tensorboard"
+tensorboard --logdir runs/
+
+# Export training metrics as JSONL and pipe to Weights & Biases
+cargo run --release --example ppo_cartpole --features "ndarray,json-log" 2>&1 \
+  | python scripts/wandb_bridge.py
+```
+
+Use the `Loggable` trait to log stats from any algorithm in one line:
+
+```rust,ignore
+use rl4burn::{Loggable, PrintLogger};
+
+let mut logger = PrintLogger::new(0);
+let (model, stats) = ppo_update(model, &mut optim, &rollout, &config, lr, &device, &mut rng);
+stats.log(&mut logger, step);
+```
+
+Save and load model weights with Burn's recorder system:
+
+```rust,ignore
+use burn::record::{CompactRecorder, Recorder};
+
+// Save
+model.save_file("checkpoints/ppo_cartpole", &CompactRecorder::new()).unwrap();
+
+// Load
+let model = ActorCritic::new(&device)
+    .load_file("checkpoints/ppo_cartpole", &CompactRecorder::new(), &device)
+    .unwrap();
+```
+
+Optional feature flags — the core crate has zero logging dependencies:
+
+| Feature | What you get |
+|---------|-------------|
+| `tensorboard` | TFEvent files for `tensorboard --logdir` |
+| `json-log` | JSONL output for wandb/mlflow/custom dashboards |
+| `video` | `write_gif()` + `CartPole::render()` for episode recording |
+
 ## Architecture
 
 ```
