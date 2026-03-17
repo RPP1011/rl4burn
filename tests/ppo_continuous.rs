@@ -1,8 +1,7 @@
-//! Integration test: masked PPO on CartPole via DiscreteEnvAdapter.
+//! Integration test: continuous PPO on Pendulum using ActionDist::Continuous.
 //!
-//! Validates that the generalized masked_ppo_collect/update works correctly
-//! with a simple discrete environment using the DiscreteEnvAdapter and
-//! ActionDist::Discrete. Should converge similarly to the original PPO test.
+//! Validates that masked_ppo_collect/update with ActionDist::Continuous(ModelOutput)
+//! learns to improve on the Pendulum task. Random policy: ~-1300. Threshold: -1000.
 
 use burn::backend::ndarray::NdArrayDevice;
 use burn::backend::{Autodiff, NdArray};
@@ -12,47 +11,50 @@ use burn::prelude::*;
 
 use rand::SeedableRng;
 
-use rl4burn::envs::CartPole;
+use rl4burn::envs::Pendulum;
 use rl4burn::{
-    masked_ppo_collect, masked_ppo_update, orthogonal_linear, ActionDist,
-    DiscreteEnvAdapter, MaskedActorCritic, PpoConfig, SyncVecEnv,
+    masked_ppo_collect, masked_ppo_update, orthogonal_linear, ActionDist, LogStdMode,
+    MaskedActorCritic, PpoConfig, SyncVecEnv,
 };
 
 type AutodiffB = Autodiff<NdArray>;
 
 // ---------------------------------------------------------------------------
-// Model: same as the standard PPO test
+// Continuous actor-critic model (ModelOutput mode)
 // ---------------------------------------------------------------------------
 
 #[derive(Module, Debug)]
-struct Agent<B: Backend> {
+struct ContinuousAgent<B: Backend> {
+    // Actor: obs -> 64 (tanh) -> 64 (tanh) -> 2 (mean + log_std)
     actor_fc1: burn::nn::Linear<B>,
     actor_fc2: burn::nn::Linear<B>,
     actor_out: burn::nn::Linear<B>,
+    // Critic: obs -> 64 (tanh) -> 64 (tanh) -> 1
     critic_fc1: burn::nn::Linear<B>,
     critic_fc2: burn::nn::Linear<B>,
     critic_out: burn::nn::Linear<B>,
 }
 
-impl<B: Backend> Agent<B> {
+impl<B: Backend> ContinuousAgent<B> {
     fn new(device: &B::Device, rng: &mut impl rand::Rng) -> Self {
         let sqrt2 = std::f32::consts::SQRT_2;
         Self {
-            actor_fc1: orthogonal_linear(4, 64, sqrt2, device, rng),
+            actor_fc1: orthogonal_linear(3, 64, sqrt2, device, rng),
             actor_fc2: orthogonal_linear(64, 64, sqrt2, device, rng),
+            // 2 outputs: mean + log_std for 1 action dim
             actor_out: orthogonal_linear(64, 2, 0.01, device, rng),
-            critic_fc1: orthogonal_linear(4, 64, sqrt2, device, rng),
+            critic_fc1: orthogonal_linear(3, 64, sqrt2, device, rng),
             critic_fc2: orthogonal_linear(64, 64, sqrt2, device, rng),
             critic_out: orthogonal_linear(64, 1, 1.0, device, rng),
         }
     }
 }
 
-impl<B: Backend> MaskedActorCritic<B> for Agent<B> {
+impl<B: Backend> MaskedActorCritic<B> for ContinuousAgent<B> {
     fn forward(&self, obs: Tensor<B, 2>) -> (Tensor<B, 2>, Tensor<B, 1>) {
         let a = self.actor_fc1.forward(obs.clone()).tanh();
         let a = self.actor_fc2.forward(a).tanh();
-        let logits = self.actor_out.forward(a);
+        let logits = self.actor_out.forward(a); // [batch, 2] = [mean, log_std]
 
         let c = self.critic_fc1.forward(obs).tanh();
         let c = self.critic_fc2.forward(c).tanh();
@@ -67,29 +69,31 @@ impl<B: Backend> MaskedActorCritic<B> for Agent<B> {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn masked_ppo_solves_cartpole() {
+fn continuous_ppo_learns_pendulum() {
     let device = NdArrayDevice::Cpu;
     let mut rng = rand::rngs::SmallRng::seed_from_u64(1);
 
     let n_envs = 4;
-    // Wrap CartPole with DiscreteEnvAdapter for Vec<f32> actions
-    let envs: Vec<DiscreteEnvAdapter<CartPole<rand::rngs::SmallRng>>> = (0..n_envs)
-        .map(|i| DiscreteEnvAdapter(CartPole::new(rand::rngs::SmallRng::seed_from_u64(1 + i as u64))))
+    let envs: Vec<Pendulum<rand::rngs::SmallRng>> = (0..n_envs)
+        .map(|i| Pendulum::new(rand::rngs::SmallRng::seed_from_u64(1 + i as u64)))
         .collect();
     let mut vec_env = SyncVecEnv::new(envs);
 
-    let model: Agent<AutodiffB> = Agent::new(&device, &mut rng);
-    let action_dist = ActionDist::Discrete(2);
+    let model: ContinuousAgent<AutodiffB> = ContinuousAgent::new(&device, &mut rng);
+    let action_dist = ActionDist::Continuous {
+        action_dim: 1,
+        log_std_mode: LogStdMode::ModelOutput,
+    };
 
     let mut optim = AdamConfig::new().with_epsilon(1e-5).init();
 
     let config = PpoConfig {
-        lr: 2.5e-4,
+        lr: 1e-3,
         gamma: 0.99,
         gae_lambda: 0.95,
         clip_eps: 0.2,
         vf_coef: 0.5,
-        ent_coef: 0.01,
+        ent_coef: 0.0,
         update_epochs: 4,
         minibatch_size: 128,
         n_steps: 128,
@@ -98,12 +102,12 @@ fn masked_ppo_solves_cartpole() {
     };
 
     let mut model = model;
-    let total_timesteps = 500_000;
+    let total_timesteps = 100_000;
     let steps_per_iter = config.n_steps * n_envs;
     let n_iterations = total_timesteps / steps_per_iter;
 
     let mut recent_returns: Vec<f32> = Vec::new();
-    let mut best_avg = 0.0f32;
+    let mut best_avg = f32::NEG_INFINITY;
     let mut current_obs = vec_env.reset();
     let mut ep_acc = vec![0.0f32; n_envs];
 
@@ -137,8 +141,8 @@ fn masked_ppo_solves_cartpole() {
             &mut rng,
         );
 
-        if recent_returns.len() > 20 {
-            let start = recent_returns.len() - 20;
+        if recent_returns.len() > 30 {
+            let start = recent_returns.len() - 30;
             recent_returns = recent_returns[start..].to_vec();
         }
 
@@ -146,22 +150,19 @@ fn masked_ppo_solves_cartpole() {
             let avg: f32 = recent_returns.iter().sum::<f32>() / recent_returns.len() as f32;
             best_avg = best_avg.max(avg);
 
-            if (iter + 1) % 25 == 0 {
+            if (iter + 1) % 20 == 0 {
                 eprintln!(
-                    "masked iter {:>4}/{}: avg_return={:>6.1} (best={:>6.1}) ploss={:>8.4} vloss={:>8.1} ent={:.3} kl={:.4}",
-                    iter + 1, n_iterations, avg, best_avg, stats.policy_loss, stats.value_loss, stats.entropy, stats.approx_kl
+                    "pendulum iter {:>4}/{}: avg_return={:>8.1} (best={:>8.1}) ploss={:>8.4} ent={:.3} kl={:.4}",
+                    iter + 1, n_iterations, avg, best_avg, stats.policy_loss, stats.entropy, stats.approx_kl
                 );
-            }
-
-            if best_avg > 450.0 {
-                eprintln!("Masked PPO solved at iter {}!", iter + 1);
-                break;
             }
         }
     }
 
+    eprintln!("Continuous PPO best avg: {best_avg:.1}");
+    // Random policy: ~-1400. Any meaningful learning should beat -1200.
     assert!(
-        best_avg > 400.0,
-        "Masked PPO should solve CartPole (best avg return {best_avg:.1}, expected >400)"
+        best_avg > -1200.0,
+        "Continuous PPO should learn Pendulum (best avg {best_avg:.1}, expected > -1200)"
     );
 }

@@ -9,6 +9,13 @@ use burn::tensor::TensorData;
 use rand::Rng;
 use std::f32::consts::PI;
 
+/// Minimum clamping bound for log_std in continuous distributions.
+/// exp(-5) ≈ 0.0067 — prevents near-zero standard deviations.
+const LOG_STD_MIN: f32 = -5.0;
+/// Maximum clamping bound for log_std in continuous distributions.
+/// exp(2) ≈ 7.4 — prevents excessively wide exploration.
+const LOG_STD_MAX: f32 = 2.0;
+
 /// How log-std is provided for continuous action distributions.
 #[derive(Debug, Clone)]
 pub enum LogStdMode {
@@ -151,7 +158,8 @@ impl ActionDist {
                     let mut batch_actions = Vec::with_capacity(ad);
                     for d in 0..ad {
                         let z = sample_normal(rng);
-                        batch_actions.push(means[d] + log_stds[d].exp() * z);
+                        let clamped = log_stds[d].clamp(LOG_STD_MIN, LOG_STD_MAX);
+                        batch_actions.push(means[d] + clamped.exp() * z);
                     }
                     actions.push(batch_actions);
                 }
@@ -243,6 +251,9 @@ impl ActionDist {
                     }
                 };
 
+                let log_stds_tensor =
+                    log_stds_tensor.clamp(LOG_STD_MIN, LOG_STD_MAX);
+
                 let action_flat: Vec<f32> =
                     actions.iter().flat_map(|a| a.iter().copied()).collect();
                 let action_tensor: Tensor<B, 2> =
@@ -327,6 +338,9 @@ impl ActionDist {
                         .unsqueeze_dim::<2>(0)
                         .repeat_dim(0, batch_size),
                 };
+
+                let log_stds_tensor =
+                    log_stds_tensor.clamp(LOG_STD_MIN, LOG_STD_MAX);
 
                 // H(Normal) = log_std + 0.5 * (1 + ln(2π))
                 let half_log_2pi_e: f32 = 0.5 * (1.0 + (2.0 * PI).ln());

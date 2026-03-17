@@ -170,7 +170,7 @@ let mut logger = CompositeLogger::new(vec![
 ]);
 
 for iter in 0..n_iterations {
-    let rollout = ppo_collect::<NdArray, _, _>(&model.valid(), &mut vec_env, &config, &device, &mut rng, &mut ep_acc);
+    let rollout = ppo_collect::<NdArray, _, _>(&model.valid(), &mut vec_env, &config, &device, &mut rng, &mut current_obs, &mut ep_acc);
 
     let step = (iter + 1) as u64 * steps_per_iter as u64;
     if !rollout.episode_returns.is_empty() {

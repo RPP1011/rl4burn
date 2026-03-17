@@ -62,9 +62,10 @@ For constant LR, just pass `config.lr`.
 `ppo_collect` accepts an `&mut Vec<f32>` accumulator for per-env episode returns. This handles episodes that span multiple rollouts correctly. Completed episode returns are in `PpoRollout::episode_returns`.
 
 ```rust,ignore
-let mut ep_acc = vec![0.0f32; n_envs]; // create once, pass every iteration
+let mut current_obs = vec_env.reset(); // create once before the loop
+let mut ep_acc = vec![0.0f32; n_envs];
 
-let rollout = ppo_collect(..., &mut ep_acc);
+let rollout = ppo_collect(..., &mut current_obs, &mut ep_acc);
 for &ret in &rollout.episode_returns {
     println!("completed episode return: {ret}");
 }
@@ -127,6 +128,65 @@ let envs: Vec<DiscreteEnvAdapter<CartPole<_>>> = (0..4)
     .map(|i| DiscreteEnvAdapter(CartPole::new(rng)))
     .collect();
 ```
+
+## Continuous action spaces
+
+For continuous control (e.g. Pendulum, MuJoCo), use `ActionDist::Continuous`. The model outputs means (and optionally log standard deviations) for a diagonal Gaussian distribution.
+
+### ModelOutput mode
+
+The model outputs `[batch, 2 * action_dim]` — first half is means, second half is log_stds:
+
+```rust,ignore
+let action_dist = ActionDist::Continuous {
+    action_dim: 1,
+    log_std_mode: LogStdMode::ModelOutput,
+};
+
+// Model outputs [batch, 2]: [mean, log_std]
+impl<B: Backend> MaskedActorCritic<B> for MyModel<B> {
+    fn forward(&self, obs: Tensor<B, 2>) -> (Tensor<B, 2>, Tensor<B, 1>) {
+        let h = self.encoder.forward(obs);
+        let logits = self.policy_head.forward(h.clone()); // [batch, 2]
+        let values = self.value_head.forward(h).squeeze_dim::<1>(1);
+        (logits, values)
+    }
+}
+```
+
+### Separate mode
+
+For state-independent log_std (CleanRL's default), the model outputs only means and provides log_std via a separate learnable parameter:
+
+```rust,ignore
+let action_dist = ActionDist::Continuous {
+    action_dim: 1,
+    log_std_mode: LogStdMode::Separate,
+};
+
+impl<B: Backend> MaskedActorCritic<B> for MyModel<B> {
+    fn forward(&self, obs: Tensor<B, 2>) -> (Tensor<B, 2>, Tensor<B, 1>) {
+        // logits = [batch, action_dim] (means only)
+        ...
+    }
+    fn log_std(&self) -> Option<Tensor<B, 1>> {
+        Some(self.log_std_param.val())
+    }
+}
+```
+
+### log_std clamping
+
+`ActionDist::Continuous` automatically clamps log_std to `[-5, 2]` in all operations (sampling, log-prob, entropy). This prevents numerical instability from excessively large or small standard deviations — a common source of training divergence in continuous RL.
+
+### Continuous PPO tips
+
+- Set `ent_coef: 0.0` — entropy bonus can destabilize continuous policies
+- Use `update_epochs: 10` — more gradient steps per rollout helps with continuous
+- Longer rollouts (`n_steps: 256+`) improve value estimation for dense-reward tasks
+- Environments should accept `Vec<f32>` actions (Pendulum does this natively)
+
+See `examples/ppo_pendulum.rs` for a complete working example.
 
 ## Implementation details
 

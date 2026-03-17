@@ -144,6 +144,10 @@ fn sample_categorical(probs: &[f32], rng: &mut impl Rng) -> usize {
 ///
 /// After stepping, GAE advantages and returns are computed.
 ///
+/// `current_obs` holds the current per-env observations. Initialize with
+/// `envs.reset()` before the first call; the collect function updates it
+/// at the end so subsequent calls continue where the last rollout left off.
+///
 /// `episode_returns_acc` tracks per-env cumulative reward across rollout
 /// boundaries. Initialize it to `vec![0.0; n_envs]` before the first call
 /// and pass the same Vec on every subsequent call. Completed episode returns
@@ -154,6 +158,7 @@ pub fn ppo_collect<B, M, E>(
     config: &PpoConfig,
     device: &B::Device,
     rng: &mut impl Rng,
+    current_obs: &mut Vec<Vec<f32>>,
     episode_returns_acc: &mut Vec<f32>,
 ) -> PpoRollout
 where
@@ -177,17 +182,13 @@ where
     let mut dones = Vec::with_capacity(total);
     let mut episode_returns = Vec::new();
 
-    // Initialize accumulator if needed (first call)
     if episode_returns_acc.is_empty() {
         episode_returns_acc.resize(n_envs, 0.0);
     }
 
-    // Current observations for each env
-    let mut current_obs: Vec<Vec<f32>> = envs.reset();
-
     for _step in 0..n_steps {
         // Store current observations
-        for obs in &current_obs {
+        for obs in current_obs.iter() {
             observations.push(obs.clone());
         }
 
@@ -238,7 +239,7 @@ where
         }
 
         // Update current observations
-        current_obs = steps.into_iter().map(|s| s.observation).collect();
+        *current_obs = steps.into_iter().map(|s| s.observation).collect();
     }
 
     // Bootstrap value for GAE

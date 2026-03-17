@@ -95,6 +95,10 @@ pub struct MaskedPpoRollout {
 /// Works identically to `ppo_collect` but supports any `ActionDist` and optional
 /// per-step action masks from the environment.
 ///
+/// `current_obs` holds the current per-env observations. Initialize with
+/// `envs.reset()` before the first call; the collect function updates it
+/// at the end so subsequent calls continue where the last rollout left off.
+///
 /// `episode_returns_acc` tracks per-env cumulative reward across rollout boundaries.
 /// Initialize to `vec![0.0; n_envs]` before the first call.
 pub fn masked_ppo_collect<B, M, E>(
@@ -104,6 +108,7 @@ pub fn masked_ppo_collect<B, M, E>(
     config: &PpoConfig,
     device: &B::Device,
     rng: &mut impl Rng,
+    current_obs: &mut Vec<Vec<f32>>,
     episode_returns_acc: &mut Vec<f32>,
 ) -> MaskedPpoRollout
 where
@@ -133,11 +138,9 @@ where
         episode_returns_acc.resize(n_envs, 0.0);
     }
 
-    let mut current_obs: Vec<Vec<f32>> = envs.reset();
-
     for _step in 0..n_steps {
         // Store current observations
-        for obs in &current_obs {
+        for obs in current_obs.iter() {
             observations.push(obs.clone());
         }
 
@@ -205,7 +208,7 @@ where
             }
         }
 
-        current_obs = steps.into_iter().map(|s| s.observation).collect();
+        *current_obs = steps.into_iter().map(|s| s.observation).collect();
     }
 
     // Bootstrap value for GAE

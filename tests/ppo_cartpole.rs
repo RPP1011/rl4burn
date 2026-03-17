@@ -112,6 +112,7 @@ fn ppo_solves_cartpole() {
 
     let mut recent_returns: Vec<f32> = Vec::new();
     let mut best_avg = 0.0f32;
+    let mut current_obs = vec_env.reset();
     let mut ep_acc = vec![0.0f32; n_envs];
 
     for iter in 0..n_iterations {
@@ -126,6 +127,7 @@ fn ppo_solves_cartpole() {
             &config,
             &device,
             &mut rng,
+            &mut current_obs,
             &mut ep_acc,
         );
 

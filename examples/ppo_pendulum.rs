@@ -1,34 +1,32 @@
-//! Train PPO on CartPole-v1 using rl4burn.
+//! Train continuous PPO on Pendulum-v1 using rl4burn.
 //!
 //! Demonstrates:
-//! - Defining a separate actor/critic model with Burn's `#[derive(Module)]`
-//! - Implementing `DiscreteActorCritic` for the model
-//! - Using `SyncVecEnv` for parallel environments
-//! - The `ppo_collect` / `ppo_update` training loop with LR annealing
-//! - Logging via the `Logger` trait (PrintLogger, TensorBoardLogger, JsonLogger)
+//! - Continuous action spaces with `ActionDist::Continuous`
+//! - Implementing `MaskedActorCritic` for a continuous model
+//! - The `masked_ppo_collect` / `masked_ppo_update` training loop
+//! - Logging via the `Logger` trait
 //!
-//! Run: `cargo run --example ppo_cartpole --features ndarray`
+//! Run: `cargo run --example ppo_pendulum --features ndarray`
 //!
 //! With TensorBoard:
-//!   `cargo run --example ppo_cartpole --features "ndarray,tensorboard"`
+//!   `cargo run --example ppo_pendulum --features "ndarray,tensorboard"`
 //!   `tensorboard --logdir runs/`
-//!
-//! With wandb (via JSON bridge):
-//!   `cargo run --example ppo_cartpole --features "ndarray,json-log" 2>&1 | python scripts/wandb_bridge.py`
 
 use burn::backend::ndarray::NdArrayDevice;
 use burn::backend::{Autodiff, NdArray};
-use burn::module::{AutodiffModule, Module};
+use burn::module::AutodiffModule;
 use burn::nn::{Linear, LinearConfig};
-use burn::grad_clipping::GradientClippingConfig;
 use burn::optim::AdamConfig;
 use burn::prelude::*;
 
 use rand::SeedableRng;
 
-use rl4burn::envs::CartPole;
-use rl4burn::{ppo_collect, ppo_update, DiscreteAcOutput, DiscreteActorCritic, Loggable, Logger, PpoConfig, SyncVecEnv};
+use rl4burn::envs::Pendulum;
 use rl4burn::log::{CompositeLogger, PrintLogger};
+use rl4burn::{
+    masked_ppo_collect, masked_ppo_update, ActionDist, Loggable, LogStdMode, Logger,
+    MaskedActorCritic, PpoConfig, SyncVecEnv,
+};
 
 #[cfg(feature = "tensorboard")]
 use rl4burn::TensorBoardLogger;
@@ -37,34 +35,35 @@ use rl4burn::TensorBoardLogger;
 use rl4burn::JsonLogger;
 
 // ---------------------------------------------------------------------------
-// Model: separate actor/critic MLPs with tanh (matches CleanRL)
+// Model: continuous actor-critic with ModelOutput log_std
 // ---------------------------------------------------------------------------
 
 #[derive(Module, Debug)]
-struct ActorCritic<B: Backend> {
+struct ContinuousAC<B: Backend> {
     actor_fc1: Linear<B>,
     actor_fc2: Linear<B>,
+    // Outputs [mean, log_std] for 1-d action
     actor_out: Linear<B>,
     critic_fc1: Linear<B>,
     critic_fc2: Linear<B>,
     critic_out: Linear<B>,
 }
 
-impl<B: Backend> ActorCritic<B> {
+impl<B: Backend> ContinuousAC<B> {
     fn new(device: &B::Device) -> Self {
         Self {
-            actor_fc1: LinearConfig::new(4, 64).init(device),
+            actor_fc1: LinearConfig::new(3, 64).init(device),
             actor_fc2: LinearConfig::new(64, 64).init(device),
-            actor_out: LinearConfig::new(64, 2).init(device),
-            critic_fc1: LinearConfig::new(4, 64).init(device),
+            actor_out: LinearConfig::new(64, 2).init(device), // mean + log_std
+            critic_fc1: LinearConfig::new(3, 64).init(device),
             critic_fc2: LinearConfig::new(64, 64).init(device),
             critic_out: LinearConfig::new(64, 1).init(device),
         }
     }
 }
 
-impl<B: Backend> DiscreteActorCritic<B> for ActorCritic<B> {
-    fn forward(&self, obs: Tensor<B, 2>) -> DiscreteAcOutput<B> {
+impl<B: Backend> MaskedActorCritic<B> for ContinuousAC<B> {
+    fn forward(&self, obs: Tensor<B, 2>) -> (Tensor<B, 2>, Tensor<B, 1>) {
         let a = self.actor_fc1.forward(obs.clone()).tanh();
         let a = self.actor_fc2.forward(a).tanh();
         let logits = self.actor_out.forward(a);
@@ -73,7 +72,7 @@ impl<B: Backend> DiscreteActorCritic<B> for ActorCritic<B> {
         let c = self.critic_fc2.forward(c).tanh();
         let values = self.critic_out.forward(c).squeeze_dim::<1>(1);
 
-        DiscreteAcOutput { logits, values }
+        (logits, values)
     }
 }
 
@@ -88,55 +87,54 @@ fn main() {
     let mut rng = rand::rngs::SmallRng::seed_from_u64(42);
 
     let n_envs = 4;
-    let envs: Vec<CartPole<rand::rngs::SmallRng>> = (0..n_envs)
-        .map(|i| CartPole::new(rand::rngs::SmallRng::seed_from_u64(1000 + i as u64)))
+    let envs: Vec<Pendulum<rand::rngs::SmallRng>> = (0..n_envs)
+        .map(|i| Pendulum::new(rand::rngs::SmallRng::seed_from_u64(1000 + i as u64)))
         .collect();
     let mut vec_env = SyncVecEnv::new(envs);
 
-    let mut model: ActorCritic<AutodiffB> = ActorCritic::new(&device);
-    let mut optim = AdamConfig::new()
-        .with_epsilon(1e-5)
-        .with_grad_clipping(Some(GradientClippingConfig::Norm(0.5)))
-        .init();
+    let mut model: ContinuousAC<AutodiffB> = ContinuousAC::new(&device);
+    let action_dist = ActionDist::Continuous {
+        action_dim: 1,
+        log_std_mode: LogStdMode::ModelOutput,
+    };
+
+    let mut optim = AdamConfig::new().with_epsilon(1e-5).init();
 
     let config = PpoConfig {
-        lr: 2.5e-4,
+        lr: 3e-4,
         gamma: 0.99,
         gae_lambda: 0.95,
         clip_eps: 0.2,
         vf_coef: 0.5,
-        ent_coef: 0.01,
-        update_epochs: 4,
-        minibatch_size: 128,
-        n_steps: 128,
+        ent_coef: 0.0,
+        update_epochs: 10,
+        minibatch_size: 64,
+        n_steps: 256,
         clip_vloss: true,
         max_grad_norm: 0.5,
     };
 
-    let total_timesteps = 500_000;
+    let total_timesteps = 1_000_000;
     let steps_per_iter = config.n_steps * n_envs;
     let n_iterations = total_timesteps / steps_per_iter;
     let mut recent_returns: Vec<f32> = Vec::new();
     let mut current_obs = vec_env.reset();
     let mut ep_acc = vec![0.0f32; n_envs];
 
-    // Build logger: always print to stderr, optionally add TensorBoard/JSON
     #[allow(unused_mut)]
     let mut loggers: Vec<Box<dyn Logger>> = vec![Box::new(PrintLogger::new(0))];
 
     #[cfg(feature = "tensorboard")]
     loggers.push(Box::new(
-        TensorBoardLogger::new("runs/ppo_cartpole").expect("failed to create TensorBoardLogger"),
+        TensorBoardLogger::new("runs/ppo_pendulum").expect("failed to create TensorBoardLogger"),
     ));
 
     #[cfg(feature = "json-log")]
-    loggers.push(Box::new(
-        JsonLogger::new(Box::new(std::io::stderr())),
-    ));
+    loggers.push(Box::new(JsonLogger::new(Box::new(std::io::stderr()))));
 
     let mut logger = CompositeLogger::new(loggers);
 
-    eprintln!("Training PPO on CartPole-v1 ({total_timesteps} timesteps, {n_envs} envs)");
+    eprintln!("Training continuous PPO on Pendulum-v1 ({total_timesteps} timesteps, {n_envs} envs)");
     eprintln!("{:-<80}", "");
 
     for iter in 0..n_iterations {
@@ -144,9 +142,10 @@ fn main() {
         let current_lr = config.lr * frac;
 
         let inference_model = model.valid();
-        let rollout = ppo_collect::<NdArray, _, _>(
+        let rollout = masked_ppo_collect::<NdArray, _, _>(
             &inference_model,
             &mut vec_env,
+            &action_dist,
             &config,
             &device,
             &mut rng,
@@ -156,11 +155,19 @@ fn main() {
         recent_returns.extend_from_slice(&rollout.episode_returns);
 
         let stats;
-        (model, stats) =
-            ppo_update(model, &mut optim, &rollout, &config, current_lr, &device, &mut rng);
+        (model, stats) = masked_ppo_update(
+            model,
+            &mut optim,
+            &rollout,
+            &action_dist,
+            &config,
+            current_lr,
+            &device,
+            &mut rng,
+        );
 
-        if recent_returns.len() > 20 {
-            let start = recent_returns.len() - 20;
+        if recent_returns.len() > 30 {
+            let start = recent_returns.len() - 30;
             recent_returns = recent_returns[start..].to_vec();
         }
 
@@ -177,9 +184,6 @@ fn main() {
     if !recent_returns.is_empty() {
         let avg: f32 = recent_returns.iter().sum::<f32>() / recent_returns.len() as f32;
         eprintln!("{:-<80}", "");
-        eprintln!("Final average return (last 20 episodes): {avg:.1}");
-        if avg > 475.0 {
-            eprintln!("CartPole-v1 solved!");
-        }
+        eprintln!("Final average return (last 30 episodes): {avg:.1}");
     }
 }

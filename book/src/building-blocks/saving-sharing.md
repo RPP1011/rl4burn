@@ -168,7 +168,7 @@ let mut logger = CompositeLogger::new(vec![
 // Training loop
 for iter in 0..n_iterations {
     let rollout = ppo_collect::<NdArray, _, _>(
-        &model.valid(), &mut vec_env, &config, &device, &mut rng, &mut ep_acc,
+        &model.valid(), &mut vec_env, &config, &device, &mut rng, &mut current_obs, &mut ep_acc,
     );
 
     let (new_model, stats) = ppo_update(
