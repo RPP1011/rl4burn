@@ -12,3 +12,4 @@ pub mod polyak;
 pub mod rnn;
 pub mod rssm;
 pub mod symlog;
+pub mod vae;

@@ -56,6 +56,11 @@ pub use algo::pfsp::{PfspConfig, PfspMatchmaking, PlayerRecord};
 pub use algo::privileged_critic::{make_critic_input, PrivilegedActorCritic};
 pub use algo::self_play::{branch_agent, SelfPlayPool};
 pub use algo::z_conditioning::{z_reward, ZConditioning, ZConditioningConfig};
+pub use algo::imagination::{imagine_rollout, lambda_returns, ImaginedTrajectory};
+pub use algo::mcts::{MctsConfig, MctsTree};
+pub use algo::distributed::{
+    DistributedConfig, GradientSync, LocalSync, ReduceStrategy, scale_gradients,
+};
 
 // Action distributions
 pub use nn::autoregressive::{ActionHead, CompositeDistribution};
@@ -81,6 +86,7 @@ pub use nn::rnn::{
 pub use nn::rssm::{Rssm, RssmConfig, RssmState};
 pub use nn::policy::{greedy_action, DiscreteAcOutput, DiscreteActorCritic};
 pub use nn::symlog::{symexp, symlog, TwohotEncoder};
+pub use nn::vae::{BetaVae, BetaVaeConfig, VaeOutput};
 
 // Rendering
 pub use env::render::{Renderable, RgbFrame};
