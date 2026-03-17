@@ -199,7 +199,8 @@ tensorboard --logdir runs/
 
 # Export training metrics as JSONL and pipe to Weights & Biases
 cargo run --release --example ppo_cartpole --features "ndarray,json-log" 2>&1 \
-  | python scripts/wandb_bridge.py
+  | python scripts/wandb_bridge.py          # requires `wandb login` first
+  # or: | python scripts/wandb_bridge.py --offline  # no account needed
 ```
 
 Use the `Loggable` trait to log stats from any algorithm in one line:

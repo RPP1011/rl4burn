@@ -5,8 +5,16 @@
 //! - Implementing `DiscreteActorCritic` for the model
 //! - Using `SyncVecEnv` for parallel environments
 //! - The `ppo_collect` / `ppo_update` training loop with LR annealing
+//! - Logging via the `Logger` trait (PrintLogger, TensorBoardLogger, JsonLogger)
 //!
 //! Run: `cargo run --example ppo_cartpole --features ndarray`
+//!
+//! With TensorBoard:
+//!   `cargo run --example ppo_cartpole --features "ndarray,tensorboard"`
+//!   `tensorboard --logdir runs/`
+//!
+//! With wandb (via JSON bridge):
+//!   `cargo run --example ppo_cartpole --features "ndarray,json-log" 2>&1 | python scripts/wandb_bridge.py`
 
 use burn::backend::ndarray::NdArrayDevice;
 use burn::backend::{Autodiff, NdArray};
@@ -19,7 +27,14 @@ use burn::prelude::*;
 use rand::SeedableRng;
 
 use rl4burn::envs::CartPole;
-use rl4burn::{ppo_collect, ppo_update, DiscreteAcOutput, DiscreteActorCritic, PpoConfig, SyncVecEnv};
+use rl4burn::{ppo_collect, ppo_update, DiscreteAcOutput, DiscreteActorCritic, Loggable, Logger, PpoConfig, SyncVecEnv};
+use rl4burn::log::{CompositeLogger, PrintLogger};
+
+#[cfg(feature = "tensorboard")]
+use rl4burn::TensorBoardLogger;
+
+#[cfg(feature = "json-log")]
+use rl4burn::JsonLogger;
 
 // ---------------------------------------------------------------------------
 // Model: separate actor/critic MLPs with tanh (matches CleanRL)
@@ -104,8 +119,24 @@ fn main() {
     let mut recent_returns: Vec<f32> = Vec::new();
     let mut ep_acc = vec![0.0f32; n_envs];
 
-    println!("Training PPO on CartPole-v1 ({total_timesteps} timesteps, {n_envs} envs)");
-    println!("{:-<80}", "");
+    // Build logger: always print to stderr, optionally add TensorBoard/JSON
+    #[allow(unused_mut)]
+    let mut loggers: Vec<Box<dyn Logger>> = vec![Box::new(PrintLogger::new(0))];
+
+    #[cfg(feature = "tensorboard")]
+    loggers.push(Box::new(
+        TensorBoardLogger::new("runs/ppo_cartpole").expect("failed to create TensorBoardLogger"),
+    ));
+
+    #[cfg(feature = "json-log")]
+    loggers.push(Box::new(
+        JsonLogger::new(Box::new(std::io::stderr())),
+    ));
+
+    let mut logger = CompositeLogger::new(loggers);
+
+    eprintln!("Training PPO on CartPole-v1 ({total_timesteps} timesteps, {n_envs} envs)");
+    eprintln!("{:-<80}", "");
 
     for iter in 0..n_iterations {
         let frac = 1.0 - iter as f64 / n_iterations as f64;
@@ -131,22 +162,22 @@ fn main() {
             recent_returns = recent_returns[start..].to_vec();
         }
 
+        let timestep = ((iter + 1) * steps_per_iter) as u64;
+
         if !recent_returns.is_empty() && (iter + 1) % 5 == 0 {
             let avg: f32 = recent_returns.iter().sum::<f32>() / recent_returns.len() as f32;
-            let timestep = (iter + 1) * steps_per_iter;
-            println!(
-                "step {:>6} | avg_return {:>6.1} | ploss {:>8.4} | vloss {:>8.2} | entropy {:>5.3} | kl {:>6.4}",
-                timestep, avg, stats.policy_loss, stats.value_loss, stats.entropy, stats.approx_kl
-            );
+            logger.log_scalar("rollout/avg_return", avg as f64, timestep);
+            stats.log(&mut logger, timestep);
         }
     }
+    logger.flush();
 
     if !recent_returns.is_empty() {
         let avg: f32 = recent_returns.iter().sum::<f32>() / recent_returns.len() as f32;
-        println!("{:-<80}", "");
-        println!("Final average return (last 20 episodes): {avg:.1}");
+        eprintln!("{:-<80}", "");
+        eprintln!("Final average return (last 20 episodes): {avg:.1}");
         if avg > 475.0 {
-            println!("CartPole-v1 solved!");
+            eprintln!("CartPole-v1 solved!");
         }
     }
 }

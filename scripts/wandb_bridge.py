@@ -2,18 +2,24 @@
 """Bridge JSONL log output from rl4burn to Weights & Biases.
 
 Usage:
-    cargo run --example ppo_cartpole --features "ndarray json-log" 2>&1 | python scripts/wandb_bridge.py
+    cargo run --example ppo_cartpole --features "ndarray,json-log" 2>&1 | python scripts/wandb_bridge.py
     # or from a file:
     python scripts/wandb_bridge.py < logs.jsonl
+    # offline mode (no API key required):
+    cargo run --example ppo_cartpole --features "ndarray,json-log" 2>&1 | python scripts/wandb_bridge.py --offline
 """
 
 import json
+import os
 import sys
 
 import wandb
 
 
 def main():
+    if "--offline" in sys.argv:
+        os.environ["WANDB_MODE"] = "offline"
+
     wandb.init(project="rl4burn")
 
     for line in sys.stdin:
