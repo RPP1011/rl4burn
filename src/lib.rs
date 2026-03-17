@@ -53,13 +53,22 @@ pub use nn::dist::{ActionDist, LogStdMode};
 
 // Neural network utilities
 pub use nn::clip::clip_grad_norm;
+pub use nn::film::{Film, FilmConfig};
 pub use nn::init::orthogonal_linear;
+pub use nn::kl_balance::{
+    categorical_kl, categorical_kl_groups, kl_balanced_loss, kl_balanced_loss_groups,
+    KlBalanceConfig,
+};
 pub use nn::loss::{policy_loss_continuous, policy_loss_discrete, value_loss};
+pub use nn::rnn::{
+    BlockGruCell, BlockGruCellConfig, GruCell, GruCellConfig, LstmCell, LstmCellConfig, LstmState,
+};
 pub use nn::policy::{greedy_action, DiscreteAcOutput, DiscreteActorCritic};
 pub use nn::symlog::{symexp, symlog, TwohotEncoder};
 
 // Rendering
 pub use env::render::{Renderable, RgbFrame};
+pub use nn::multi_head_value::{multi_head_gae, multi_head_value_loss, MultiHeadGaeResult, MultiHeadValueConfig};
 pub use nn::polyak::polyak_update;
 
 // Data collection

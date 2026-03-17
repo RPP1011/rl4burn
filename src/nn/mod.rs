@@ -1,7 +1,11 @@
 pub mod clip;
 pub mod dist;
+pub mod film;
 pub mod init;
+pub mod kl_balance;
 pub mod loss;
+pub mod multi_head_value;
 pub mod policy;
 pub mod polyak;
+pub mod rnn;
 pub mod symlog;
