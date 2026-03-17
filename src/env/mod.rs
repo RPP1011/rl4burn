@@ -4,6 +4,7 @@
 //! flags, auto-reset semantics for vectorized environments.
 
 pub mod adapter;
+pub mod render;
 pub mod space;
 pub mod vec_env;
 pub mod wrapper;

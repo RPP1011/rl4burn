@@ -1,11 +1,13 @@
 # Replay Buffer
 
-`ReplayBuffer<S>` stores transitions for off-policy algorithms like DQN. It's generic over the sample type — you define your own transition struct.
+`ReplayBuffer<S, R>` stores transitions for off-policy algorithms like DQN. It's generic over the sample type and a deterministic RNG for reproducible sampling.
 
 ## API
 
 ```rust,ignore
-let mut buffer = ReplayBuffer::new(10_000); // capacity
+use rand::SeedableRng;
+
+let mut buffer = ReplayBuffer::new(10_000, rand::rngs::SmallRng::seed_from_u64(42));
 
 buffer.extend(transitions);          // add samples
 let batch = buffer.sample(64);       // random references
@@ -15,7 +17,7 @@ let groups = buffer.group_by(|t| t.episode_id); // group by key
 
 ## Eviction
 
-When the buffer exceeds capacity, excess samples are evicted **uniformly at random** using a Fisher-Yates partial shuffle. This is simpler and often equivalent to FIFO eviction for large buffers.
+When the buffer exceeds capacity, the oldest samples are dropped first (FIFO).
 
 ## With DQN
 
@@ -23,7 +25,7 @@ When the buffer exceeds capacity, excess samples are evicted **uniformly at rand
 use rl4burn::dqn::Transition;
 use rl4burn::replay::ReplayBuffer;
 
-let mut buffer = ReplayBuffer::new(10_000);
+let mut buffer = ReplayBuffer::new(10_000, rand::rngs::SmallRng::seed_from_u64(42));
 
 // Store transitions
 buffer.extend(std::iter::once(Transition {

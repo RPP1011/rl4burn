@@ -70,6 +70,64 @@ for &ret in &rollout.episode_returns {
 }
 ```
 
+## Multi-discrete actions and action masking
+
+For complex action spaces (multiple discrete dimensions, per-step validity masks), use `masked_ppo_collect` and `masked_ppo_update` with an `ActionDist`:
+
+```rust,ignore
+use rl4burn::{ActionDist, MaskedActorCritic, masked_ppo_collect, masked_ppo_update};
+
+// Action space: [action_type(5), target(10)]
+let action_dist = ActionDist::MultiDiscrete(vec![5, 10]);
+```
+
+### The MaskedActorCritic trait
+
+```rust,ignore
+pub trait MaskedActorCritic<B: Backend> {
+    fn forward(&self, obs: Tensor<B, 2>) -> (Tensor<B, 2>, Tensor<B, 1>);
+    fn log_std(&self) -> Option<Tensor<B, 1>> { None } // continuous only
+}
+```
+
+If you already have a `DiscreteActorCritic` model, the delegation is trivial:
+
+```rust,ignore
+impl<B: Backend> MaskedActorCritic<B> for MyModel<B> {
+    fn forward(&self, obs: Tensor<B, 2>) -> (Tensor<B, 2>, Tensor<B, 1>) {
+        let out = DiscreteActorCritic::forward(self, obs);
+        (out.logits, out.values)
+    }
+}
+```
+
+### Action masking
+
+Environments provide per-step masks via `Env::action_mask()`:
+
+```rust,ignore
+fn action_mask(&self) -> Option<Vec<f32>> {
+    let mut mask = vec![0.0; 15]; // 5 + 10
+    for valid_type in &self.valid_action_types { mask[*valid_type] = 1.0; }
+    for valid_target in &self.valid_targets { mask[5 + *valid_target] = 1.0; }
+    Some(mask)
+}
+```
+
+Masked actions are never sampled and receive zero probability during training.
+
+### Env action type
+
+The masked pipeline expects `Env<Action = Vec<f32>>`. For existing discrete envs (`Action = usize`), use `DiscreteEnvAdapter`:
+
+```rust,ignore
+use rl4burn::DiscreteEnvAdapter;
+
+let envs: Vec<DiscreteEnvAdapter<CartPole<_>>> = (0..4)
+    .map(|i| DiscreteEnvAdapter(CartPole::new(rng)))
+    .collect();
+```
+
 ## Implementation details
 
 - **Per-minibatch advantage normalization**: Advantages are z-normalized within each minibatch, not globally across the full rollout.

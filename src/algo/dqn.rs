@@ -78,8 +78,6 @@ pub struct DqnConfig {
     pub eps_decay_steps: usize,
     /// Number of random steps before training starts.
     pub learning_starts: usize,
-    /// How often to perform a gradient update (in env steps).
-    pub train_frequency: usize,
 }
 
 impl Default for DqnConfig {
@@ -94,7 +92,6 @@ impl Default for DqnConfig {
             eps_end: 0.05,
             eps_decay_steps: 10_000,
             learning_starts: 1_000,
-            train_frequency: 1,
         }
     }
 }
@@ -176,11 +173,11 @@ pub fn epsilon_greedy<B: Backend, M: QNetwork<B>>(
 ///
 /// Returns updated online model and training stats. The caller is responsible
 /// for calling `polyak_update` on the target network afterward.
-pub fn dqn_update<B, M, O>(
+pub fn dqn_update<B, M, O, R>(
     online: M,
     target: &M,
     optim: &mut O,
-    buffer: &mut ReplayBuffer<Transition>,
+    buffer: &mut ReplayBuffer<Transition, R>,
     config: &DqnConfig,
     device: &B::Device,
 ) -> (M, DqnStats)
@@ -188,6 +185,7 @@ where
     B: AutodiffBackend,
     M: QNetwork<B> + AutodiffModule<B>,
     O: Optimizer<M, B>,
+    R: rand::Rng,
 {
     let batch = buffer.sample_cloned(config.batch_size);
     let batch_size = batch.len();

@@ -4,6 +4,7 @@
 //! models. Users implement these on their Burn modules.
 
 use burn::prelude::*;
+use burn::tensor::TensorData;
 
 /// Output of a discrete actor-critic forward pass.
 pub struct DiscreteAcOutput<B: Backend> {
@@ -43,20 +44,31 @@ pub trait DiscreteActorCritic<B: Backend> {
     fn forward(&self, obs: Tensor<B, 2>) -> DiscreteAcOutput<B>;
 }
 
-/// A deterministic policy for inference and deployment.
+/// Run a forward pass and return the greedy (argmax) action for a single observation.
 ///
-/// Works with plain `Backend` (no autodiff needed), enabling deployment
-/// on NdArray, WGPU, or WASM backends without training infrastructure.
-pub trait Policy<B: Backend> {
-    /// Select actions deterministically given a batch of observations.
-    ///
-    /// Returns action tensor. Shape depends on the action space:
-    /// - Discrete: `[batch, 1]` (action indices as floats)
-    /// - Continuous: `[batch, action_dim]`
-    fn act(&self, obs: Tensor<B, 2>) -> Tensor<B, 2>;
-}
-
-/// Convenience: get the greedy (argmax) action from an actor-critic model.
-pub fn greedy_action<B: Backend>(output: &DiscreteAcOutput<B>) -> Tensor<B, 2> {
-    output.logits.clone().argmax(1).float()
+/// Convenience function for inference and evaluation loops. Handles tensor
+/// conversion internally so the caller works with plain `&[f32]` and `usize`.
+///
+/// # Example
+///
+/// ```ignore
+/// let action = greedy_action(&model, &obs, &device);
+/// let step = env.step(action);
+/// ```
+pub fn greedy_action<B: Backend, M: DiscreteActorCritic<B>>(
+    model: &M,
+    obs: &[f32],
+    device: &B::Device,
+) -> usize {
+    let obs_tensor: Tensor<B, 2> =
+        Tensor::from_data(TensorData::new(obs.to_vec(), [1, obs.len()]), device);
+    let output = model.forward(obs_tensor);
+    let action_data: Vec<f32> = output
+        .logits
+        .argmax(1)
+        .float()
+        .into_data()
+        .to_vec()
+        .unwrap();
+    action_data[0] as usize
 }

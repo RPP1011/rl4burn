@@ -52,7 +52,7 @@ use rl4burn::polyak::polyak_update;
 use rl4burn::env::Env;
 
 let config = DqnConfig::default();
-let mut buffer = ReplayBuffer::new(config.buffer_capacity);
+let mut buffer = ReplayBuffer::new(config.buffer_capacity, rand::rngs::SmallRng::seed_from_u64(42));
 let mut online: QNet<AB> = QNet::new(&device);
 let mut target = online.clone();
 let mut optim = AdamConfig::new().init();
@@ -104,7 +104,6 @@ for step in 0..50_000 {
 | `eps_end` | 0.05 | Final exploration rate |
 | `eps_decay_steps` | 10,000 | Steps to anneal epsilon |
 | `learning_starts` | 1,000 | Random steps before training |
-| `train_frequency` | 1 | Env steps per gradient step |
 
 ## Target network
 

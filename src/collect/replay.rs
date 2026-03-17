@@ -3,42 +3,40 @@
 //! Generic over sample type — users define their own sample struct.
 
 use contracts::*;
+use rand::Rng;
 
 /// A replay buffer that stores samples with trajectory metadata.
 ///
 /// Supports:
-/// - Uniform random eviction when over capacity
+/// - FIFO eviction when over capacity (oldest samples dropped first)
 /// - Trajectory grouping by ID for V-trace rescoring
 /// - Capacity-bounded storage
-pub struct ReplayBuffer<S> {
+///
+/// The buffer is parameterized by a deterministic RNG for reproducible sampling.
+pub struct ReplayBuffer<S, R> {
     samples: Vec<S>,
     capacity: usize,
-    rng: u64,
+    rng: R,
 }
 
-impl<S> ReplayBuffer<S> {
-    /// Create a new replay buffer with the given capacity.
+impl<S, R: Rng> ReplayBuffer<S, R> {
+    /// Create a new replay buffer with the given capacity and RNG.
     #[requires(capacity > 0, "capacity must be positive")]
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize, rng: R) -> Self {
         Self {
             samples: Vec::new(),
             capacity,
-            rng: 0xDEADBEEF,
+            rng,
         }
     }
 
-    /// Add samples, evicting uniformly at random if over capacity.
+    /// Add samples, dropping the oldest (FIFO) if over capacity.
     #[ensures(self.len() <= self.capacity)]
     pub fn extend(&mut self, new_samples: impl IntoIterator<Item = S>) {
         self.samples.extend(new_samples);
         if self.samples.len() > self.capacity {
-            // Fisher-Yates partial shuffle: randomly select `capacity` to keep
-            for i in 0..self.capacity {
-                self.rng = self.rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-                let j = i + (self.rng >> 33) as usize % (self.samples.len() - i);
-                self.samples.swap(i, j);
-            }
-            self.samples.truncate(self.capacity);
+            let excess = self.samples.len() - self.capacity;
+            self.samples.drain(..excess);
         }
     }
 
@@ -56,26 +54,35 @@ impl<S> ReplayBuffer<S> {
     #[ensures(ret.len() <= size)]
     pub fn sample(&mut self, size: usize) -> Vec<&S> {
         let n = self.samples.len();
-        if n == 0 { return vec![]; }
+        if n == 0 {
+            return vec![];
+        }
         let size = size.min(n);
-        (0..size).map(|_| {
-            self.rng = self.rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            let idx = (self.rng >> 33) as usize % n;
-            &self.samples[idx]
-        }).collect()
+        (0..size)
+            .map(|_| {
+                let idx = self.rng.random_range(0..n);
+                &self.samples[idx]
+            })
+            .collect()
     }
 
     /// Sample a random minibatch of cloned samples.
     #[ensures(ret.len() <= size)]
-    pub fn sample_cloned(&mut self, size: usize) -> Vec<S> where S: Clone {
+    pub fn sample_cloned(&mut self, size: usize) -> Vec<S>
+    where
+        S: Clone,
+    {
         let n = self.samples.len();
-        if n == 0 { return vec![]; }
+        if n == 0 {
+            return vec![];
+        }
         let size = size.min(n);
-        (0..size).map(|_| {
-            self.rng = self.rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            let idx = (self.rng >> 33) as usize % n;
-            self.samples[idx].clone()
-        }).collect()
+        (0..size)
+            .map(|_| {
+                let idx = self.rng.random_range(0..n);
+                self.samples[idx].clone()
+            })
+            .collect()
     }
 
     /// Access all samples (for rescoring).
@@ -106,24 +113,29 @@ impl<S> ReplayBuffer<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::SeedableRng;
+
+    fn rng() -> rand::rngs::SmallRng {
+        rand::rngs::SmallRng::seed_from_u64(42)
+    }
 
     #[test]
     fn capacity_enforced() {
-        let mut buf = ReplayBuffer::new(5);
+        let mut buf = ReplayBuffer::new(5, rng());
         buf.extend(0..10);
         assert_eq!(buf.len(), 5);
     }
 
     #[test]
     fn empty_buffer() {
-        let buf: ReplayBuffer<i32> = ReplayBuffer::new(10);
+        let buf: ReplayBuffer<i32, _> = ReplayBuffer::new(10, rng());
         assert!(buf.is_empty());
         assert_eq!(buf.len(), 0);
     }
 
     #[test]
     fn sample_returns_correct_size() {
-        let mut buf = ReplayBuffer::new(100);
+        let mut buf = ReplayBuffer::new(100, rng());
         buf.extend(0..50);
         let batch = buf.sample(10);
         assert_eq!(batch.len(), 10);
@@ -131,7 +143,7 @@ mod tests {
 
     #[test]
     fn sample_cloned_returns_correct_size() {
-        let mut buf = ReplayBuffer::new(100);
+        let mut buf = ReplayBuffer::new(100, rng());
         buf.extend(0..50);
         let batch = buf.sample_cloned(10);
         assert_eq!(batch.len(), 10);
@@ -139,9 +151,13 @@ mod tests {
 
     #[test]
     fn group_by_works() {
-        let mut buf = ReplayBuffer::new(100);
+        let mut buf = ReplayBuffer::new(100, rng());
         buf.extend(vec![
-            (1u32, "a"), (1, "b"), (2, "c"), (2, "d"), (3, "e"),
+            (1u32, "a"),
+            (1, "b"),
+            (2, "c"),
+            (2, "d"),
+            (3, "e"),
         ]);
         let groups = buf.group_by(|(id, _)| *id);
         assert_eq!(groups[&1].len(), 2);
@@ -151,8 +167,28 @@ mod tests {
 
     #[test]
     fn extend_under_capacity_keeps_all() {
-        let mut buf = ReplayBuffer::new(100);
+        let mut buf = ReplayBuffer::new(100, rng());
         buf.extend(0..10);
         assert_eq!(buf.len(), 10);
+    }
+
+    #[test]
+    fn fifo_keeps_newest() {
+        let mut buf = ReplayBuffer::new(5, rng());
+        buf.extend(0..10);
+        // Should keep 5..10 (the newest)
+        let samples: Vec<&i32> = buf.samples().iter().collect();
+        assert_eq!(samples, vec![&5, &6, &7, &8, &9]);
+    }
+
+    #[test]
+    fn deterministic_sampling() {
+        let mut buf1 = ReplayBuffer::new(100, rand::rngs::SmallRng::seed_from_u64(7));
+        let mut buf2 = ReplayBuffer::new(100, rand::rngs::SmallRng::seed_from_u64(7));
+        buf1.extend(0..50);
+        buf2.extend(0..50);
+        let s1: Vec<i32> = buf1.sample_cloned(10);
+        let s2: Vec<i32> = buf2.sample_cloned(10);
+        assert_eq!(s1, s2, "same seed should produce same samples");
     }
 }

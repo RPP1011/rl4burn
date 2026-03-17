@@ -109,20 +109,10 @@ impl<R: Rng> Env for CartPole<R> {
 // Rendering
 // ---------------------------------------------------------------------------
 
-/// An RGB frame (row-major, 3 bytes per pixel).
-pub struct RgbFrame {
-    pub width: u16,
-    pub height: u16,
-    /// Row-major RGB pixels, length = width * height * 3.
-    pub data: Vec<u8>,
-}
+use crate::env::render::{Renderable, RgbFrame};
 
-impl<R> CartPole<R> {
-    /// Render the current state to an RGB pixel buffer.
-    ///
-    /// Draws: ground line, cart (blue rectangle), pole (red line), axle dot.
-    /// Canvas is 600×400.
-    pub fn render(&self) -> RgbFrame {
+impl<R> Renderable for CartPole<R> {
+    fn render(&self) -> RgbFrame {
         let w: u16 = 600;
         let h: u16 = 400;
         let mut pixels = vec![255u8; w as usize * h as usize * 3]; // white bg

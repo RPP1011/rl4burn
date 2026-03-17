@@ -55,7 +55,10 @@ pub use nn::dist::{ActionDist, LogStdMode};
 pub use nn::clip::clip_grad_norm;
 pub use nn::init::orthogonal_linear;
 pub use nn::loss::{policy_loss_continuous, policy_loss_discrete, value_loss};
-pub use nn::policy::{greedy_action, DiscreteAcOutput, DiscreteActorCritic, Policy};
+pub use nn::policy::{greedy_action, DiscreteAcOutput, DiscreteActorCritic};
+
+// Rendering
+pub use env::render::{Renderable, RgbFrame};
 pub use nn::polyak::polyak_update;
 
 // Data collection

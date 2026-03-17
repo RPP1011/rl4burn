@@ -185,7 +185,7 @@ mod json_tests {
 #[test]
 fn cartpole_render_produces_rgb_frame() {
     use rand::SeedableRng;
-    use rl4burn::envs::cartpole::RgbFrame;
+    use rl4burn::env::render::{Renderable, RgbFrame};
     use rl4burn::envs::CartPole;
     use rl4burn::Env;
 

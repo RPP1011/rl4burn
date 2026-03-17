@@ -70,12 +70,12 @@ fn dqn_solves_cartpole() {
         eps_end: 0.05,
         eps_decay_steps: 5_000,
         learning_starts: 256,
-        train_frequency: 1,
     };
+    let train_frequency = 1;
     let target_update_freq = 250;
     let total_timesteps = 50_000;
 
-    let mut buffer = ReplayBuffer::new(config.buffer_capacity);
+    let mut buffer = ReplayBuffer::new(config.buffer_capacity, rand::rngs::SmallRng::seed_from_u64(99));
     let mut obs = env.reset();
     let mut recent_returns: Vec<f32> = Vec::new();
     let mut best_avg = 0.0f32;
@@ -111,7 +111,7 @@ fn dqn_solves_cartpole() {
 
         // Train
         if step >= config.learning_starts
-            && step % config.train_frequency == 0
+            && step % train_frequency == 0
             && buffer.len() >= config.batch_size
         {
             let stats;

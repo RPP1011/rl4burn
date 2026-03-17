@@ -138,11 +138,11 @@ Enable the `video` feature to record CartPole episodes as GIFs:
 rl4burn = { version = "0.1", features = ["video"] }
 ```
 
-CartPole has a built-in `render()` method that produces RGB frames:
+Any environment implementing the `Renderable` trait can produce RGB frames. CartPole and GridWorld both implement it:
 
 ```rust,ignore
 use rl4burn::envs::CartPole;
-use rl4burn::{write_gif, Env};
+use rl4burn::{write_gif, Env, Renderable};
 
 let mut env = CartPole::new(rng);
 env.reset();

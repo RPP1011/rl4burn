@@ -89,15 +89,14 @@ With the `video` feature, record an episode of your trained agent and save it as
 
 ```rust,ignore
 use rl4burn::envs::CartPole;
-use rl4burn::{write_gif, Env};
+use rl4burn::{write_gif, greedy_action, Env, Renderable};
 
 let mut env = CartPole::new(rng);
-let obs = env.reset();
+let mut obs = env.reset();
 
 let mut frames = vec![env.render()];
-let mut obs = obs;
 loop {
-    // Use the trained model for inference
+    // greedy_action runs a forward pass and returns the argmax action
     let action = greedy_action(&model, &obs, &device);
     let step = env.step(action);
     frames.push(env.render());
@@ -158,7 +157,7 @@ A complete training script that checkpoints the model and records a final evalua
 use burn::record::{CompactRecorder, Recorder};
 use rl4burn::{
     CompositeLogger, Loggable, Logger, PrintLogger, TensorBoardLogger,
-    envs::CartPole, write_gif, Env, greedy_action,
+    envs::CartPole, write_gif, Env, Renderable, greedy_action,
 };
 
 let mut logger = CompositeLogger::new(vec![
@@ -194,12 +193,11 @@ logger.flush();
 model.save_file("checkpoints/ppo_final", &CompactRecorder::new()).unwrap();
 
 // Record evaluation episode
-let eval_model = model.valid();
 let mut env = CartPole::new(rng);
 let mut obs = env.reset();
 let mut frames = vec![env.render()];
 loop {
-    let action = greedy_action(&eval_model, &obs, &device);
+    let action = greedy_action(&model.valid(), &obs, &device);
     let step = env.step(action);
     frames.push(env.render());
     if step.done() { break; }

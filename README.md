@@ -160,7 +160,7 @@ fn main() {
     };
     let mut target = online.clone();
     let mut optim = AdamConfig::new().init();
-    let mut buffer = ReplayBuffer::new(config.buffer_capacity);
+    let mut buffer = ReplayBuffer::new(config.buffer_capacity, rand::rngs::SmallRng::seed_from_u64(42));
     let mut obs = env.reset();
 
     for step in 0..50_000 {
@@ -233,7 +233,7 @@ Optional feature flags — the core crate has zero logging dependencies:
 |---------|-------------|
 | `tensorboard` | TFEvent files for `tensorboard --logdir` |
 | `json-log` | JSONL output for wandb/mlflow/custom dashboards |
-| `video` | `write_gif()` + `CartPole::render()` for episode recording |
+| `video` | `write_gif()` + `Renderable::render()` for episode recording |
 
 ## Architecture
 

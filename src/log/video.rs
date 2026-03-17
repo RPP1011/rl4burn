@@ -1,6 +1,6 @@
 //! GIF video writer for recording episodes.
 
-use crate::envs::cartpole::RgbFrame;
+use crate::env::render::RgbFrame;
 
 use std::fs::File;
 use std::path::Path;
