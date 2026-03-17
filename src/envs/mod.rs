@@ -2,4 +2,4 @@
 
 pub mod cartpole;
 
-pub use cartpole::CartPole;
+pub use cartpole::{CartPole, RgbFrame};

@@ -27,6 +27,9 @@ pub mod nn;
 /// Data collection and advantage estimation.
 pub mod collect;
 
+/// Logging infrastructure for training metrics.
+pub mod log;
+
 // ---------------------------------------------------------------------------
 // Convenience re-exports
 // ---------------------------------------------------------------------------
@@ -53,3 +56,12 @@ pub use collect::advantage::normalize;
 pub use collect::gae::gae;
 pub use collect::replay::ReplayBuffer;
 pub use collect::vtrace::vtrace_targets;
+
+// Logging
+pub use log::{CompositeLogger, Loggable, Logger, NoopLogger, PrintLogger};
+#[cfg(feature = "tensorboard")]
+pub use log::TensorBoardLogger;
+#[cfg(feature = "json-log")]
+pub use log::JsonLogger;
+#[cfg(feature = "video")]
+pub use log::write_gif;

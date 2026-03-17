@@ -10,6 +10,8 @@ burn = { version = "0.20", default-features = false, features = ["std"] }
 contracts = "0.6"
 rand = "0.9"
 rand_distr = "0.5"
+crc32c = { version = "0.6", optional = true }
+gif = { version = "0.13", optional = true }
 
 [dev-dependencies]
 burn = { version = "0.20", default-features = false, features = ["std", "ndarray", "autodiff"] }
@@ -17,3 +19,6 @@ burn = { version = "0.20", default-features = false, features = ["std", "ndarray
 [features]
 default = []
 ndarray = ["burn/ndarray"]
+tensorboard = ["crc32c"]
+json-log = []
+video = ["gif"]

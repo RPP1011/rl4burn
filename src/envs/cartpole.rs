@@ -105,6 +105,143 @@ impl<R: Rng> Env for CartPole<R> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+/// An RGB frame (row-major, 3 bytes per pixel).
+pub struct RgbFrame {
+    pub width: u16,
+    pub height: u16,
+    /// Row-major RGB pixels, length = width * height * 3.
+    pub data: Vec<u8>,
+}
+
+impl<R> CartPole<R> {
+    /// Render the current state to an RGB pixel buffer.
+    ///
+    /// Draws: ground line, cart (blue rectangle), pole (red line), axle dot.
+    /// Canvas is 600×400.
+    pub fn render(&self) -> RgbFrame {
+        let w: u16 = 600;
+        let h: u16 = 400;
+        let mut pixels = vec![255u8; w as usize * h as usize * 3]; // white bg
+
+        let [x, _, theta, _] = self.state;
+
+        // Coordinate mapping: cart x in [-2.4, 2.4] -> pixel x
+        let scale = w as f32 / 4.8;
+        let cart_cx = (w as f32 / 2.0 + x * scale) as i32;
+        let ground_y: i32 = 300;
+
+        // Draw ground line
+        draw_rect(&mut pixels, w, 0, ground_y, w as i32, ground_y + 2, [180, 180, 180]);
+
+        // Cart: 80×30 rectangle
+        let cart_w = 80i32;
+        let cart_h = 30i32;
+        let cart_top = ground_y - cart_h;
+        draw_rect(
+            &mut pixels, w,
+            cart_cx - cart_w / 2, cart_top,
+            cart_cx + cart_w / 2, ground_y,
+            [30, 30, 180],
+        );
+
+        // Pole: line from cart top center, length 150px, angle theta from vertical
+        let pole_len = 150.0f32;
+        let pole_base_x = cart_cx as f32;
+        let pole_base_y = cart_top as f32;
+        let pole_tip_x = pole_base_x + pole_len * theta.sin();
+        let pole_tip_y = pole_base_y - pole_len * theta.cos();
+        draw_thick_line(
+            &mut pixels, w, h,
+            pole_base_x as i32, pole_base_y as i32,
+            pole_tip_x as i32, pole_tip_y as i32,
+            3,
+            [180, 60, 30],
+        );
+
+        // Axle dot
+        draw_circle(&mut pixels, w, h, cart_cx, cart_top, 5, [40, 40, 40]);
+
+        // Pole tip dot
+        draw_circle(&mut pixels, w, h, pole_tip_x as i32, pole_tip_y as i32, 4, [200, 40, 20]);
+
+        RgbFrame { width: w, height: h, data: pixels }
+    }
+}
+
+fn draw_rect(pixels: &mut [u8], canvas_w: u16, x0: i32, y0: i32, x1: i32, y1: i32, color: [u8; 3]) {
+    let w = canvas_w as i32;
+    let h = (pixels.len() / 3 / w as usize) as i32;
+    for y in y0.max(0)..y1.min(h) {
+        for x in x0.max(0)..x1.min(w) {
+            let idx = (y * w + x) as usize * 3;
+            pixels[idx..idx + 3].copy_from_slice(&color);
+        }
+    }
+}
+
+fn draw_circle(pixels: &mut [u8], canvas_w: u16, canvas_h: u16, cx: i32, cy: i32, r: i32, color: [u8; 3]) {
+    let w = canvas_w as i32;
+    let h = canvas_h as i32;
+    for dy in -r..=r {
+        for dx in -r..=r {
+            if dx * dx + dy * dy <= r * r {
+                let px = cx + dx;
+                let py = cy + dy;
+                if px >= 0 && px < w && py >= 0 && py < h {
+                    let idx = (py * w + px) as usize * 3;
+                    pixels[idx..idx + 3].copy_from_slice(&color);
+                }
+            }
+        }
+    }
+}
+
+fn draw_thick_line(
+    pixels: &mut [u8], canvas_w: u16, canvas_h: u16,
+    x0: i32, y0: i32, x1: i32, y1: i32, thickness: i32, color: [u8; 3],
+) {
+    // Bresenham with thickness via perpendicular offsets
+    let dx = (x1 - x0).abs();
+    let dy = -(y1 - y0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut err = dx + dy;
+    let mut cx = x0;
+    let mut cy = y0;
+    let w = canvas_w as i32;
+    let h = canvas_h as i32;
+
+    loop {
+        // Draw a small filled square at each point for thickness
+        for oy in -(thickness / 2)..=(thickness / 2) {
+            for ox in -(thickness / 2)..=(thickness / 2) {
+                let px = cx + ox;
+                let py = cy + oy;
+                if px >= 0 && px < w && py >= 0 && py < h {
+                    let idx = (py * w + px) as usize * 3;
+                    pixels[idx..idx + 3].copy_from_slice(&color);
+                }
+            }
+        }
+        if cx == x1 && cy == y1 {
+            break;
+        }
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            cx += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            cy += sy;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
