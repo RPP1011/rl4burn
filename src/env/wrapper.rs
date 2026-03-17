@@ -3,8 +3,8 @@
 //! Composable transformations applied around an environment:
 //! episode statistics tracking, reward clipping, observation normalization.
 
-use crate::env::{Env, Step};
-use crate::space::Space;
+use super::{Env, Step};
+use super::space::Space;
 
 // ---------------------------------------------------------------------------
 // EpisodeStats
@@ -200,7 +200,7 @@ impl<E: Env<Observation = Vec<f32>>> Env for NormalizeObservation<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::env::Step;
+    use super::Step;
 
     struct ConstEnv;
 

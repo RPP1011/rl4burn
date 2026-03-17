@@ -13,10 +13,7 @@ use burn::prelude::*;
 use rand::SeedableRng;
 
 use rl4burn::envs::CartPole;
-use rl4burn::init::orthogonal_linear;
-use rl4burn::policy::{DiscreteAcOutput, DiscreteActorCritic};
-use rl4burn::ppo::{ppo_collect, ppo_update, PpoConfig};
-use rl4burn::vec_env::SyncVecEnv;
+use rl4burn::{orthogonal_linear, ppo_collect, ppo_update, DiscreteAcOutput, DiscreteActorCritic, PpoConfig, SyncVecEnv};
 
 type AutodiffB = Autodiff<NdArray>;
 

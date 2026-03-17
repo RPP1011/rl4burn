@@ -10,8 +10,7 @@ use burn::prelude::*;
 
 use rand::SeedableRng;
 
-use rl4burn::init::orthogonal_linear;
-use rl4burn::policy::{DiscreteAcOutput, DiscreteActorCritic};
+use rl4burn::{orthogonal_linear, DiscreteAcOutput, DiscreteActorCritic};
 
 type AB = Autodiff<NdArray>;
 

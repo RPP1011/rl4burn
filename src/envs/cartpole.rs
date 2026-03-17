@@ -11,7 +11,7 @@
 //! - **Truncated**: step count ≥ 500
 
 use crate::env::{Env, Step};
-use crate::space::Space;
+use crate::env::space::Space;
 use rand::Rng;
 
 const GRAVITY: f32 = 9.8;

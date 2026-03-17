@@ -19,9 +19,7 @@ use burn::prelude::*;
 use rand::SeedableRng;
 
 use rl4burn::envs::CartPole;
-use rl4burn::policy::{DiscreteAcOutput, DiscreteActorCritic};
-use rl4burn::ppo::{ppo_collect, ppo_update, PpoConfig};
-use rl4burn::vec_env::SyncVecEnv;
+use rl4burn::{ppo_collect, ppo_update, DiscreteAcOutput, DiscreteActorCritic, PpoConfig, SyncVecEnv};
 
 // ---------------------------------------------------------------------------
 // Model: separate actor/critic MLPs with tanh (matches CleanRL)

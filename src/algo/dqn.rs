@@ -12,7 +12,7 @@
 //! averaging). The target network provides stable TD targets for the Bellman
 //! backup, preventing the moving-target instability of naive Q-learning.
 
-use crate::replay::ReplayBuffer;
+use crate::collect::replay::ReplayBuffer;
 
 use burn::module::AutodiffModule;
 use burn::optim::{GradientsParams, Optimizer};

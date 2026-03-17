@@ -3,7 +3,11 @@
 //! Follows modern Gymnasium conventions: separate `terminated` and `truncated`
 //! flags, auto-reset semantics for vectorized environments.
 
-use crate::space::Space;
+pub mod space;
+pub mod vec_env;
+pub mod wrapper;
+
+use space::Space;
 
 /// Result of a single environment step.
 #[derive(Debug, Clone)]

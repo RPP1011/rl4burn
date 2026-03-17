@@ -3,8 +3,8 @@
 //! Auto-resets environments when episodes end, returning the initial
 //! observation of the new episode in the step result.
 
-use crate::env::{Env, Step};
-use crate::space::Space;
+use super::{Env, Step};
+use super::space::Space;
 
 /// Synchronous vectorized environment.
 ///

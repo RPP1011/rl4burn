@@ -7,11 +7,11 @@
 //! normalization, value loss clipping, and support for LR annealing.
 //! Configure gradient clipping (`max_grad_norm=0.5`) on your optimizer.
 
-use crate::clip::clip_grad_norm;
+use crate::collect::gae;
+use crate::env::vec_env::SyncVecEnv;
 use crate::env::Env;
-use crate::gae;
-use crate::policy::{DiscreteAcOutput, DiscreteActorCritic};
-use crate::vec_env::SyncVecEnv;
+use crate::nn::clip::clip_grad_norm;
+use crate::nn::policy::{DiscreteAcOutput, DiscreteActorCritic};
 
 use burn::optim::{GradientsParams, Optimizer};
 use burn::prelude::*;
@@ -163,7 +163,7 @@ where
 {
     let n_envs = envs.num_envs();
     let obs_dim = match envs.observation_space() {
-        crate::space::Space::Box { ref low, .. } => low.len(),
+        crate::env::space::Space::Box { ref low, .. } => low.len(),
         s => s.flat_dim(),
     };
     let n_steps = config.n_steps;

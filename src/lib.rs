@@ -6,48 +6,50 @@
 //!
 //! # Modules
 //!
-//! - **Environment** (`env`, `vec_env`, `wrapper`, `envs`): Gymnasium-style
-//!   environment trait with vectorized environments and composable wrappers.
-//! - **Spaces** (`space`): Action and observation space descriptions.
-//! - **Algorithms** (`ppo`): On-policy and off-policy RL algorithms.
-//! - **Building blocks** (`loss`, `vtrace`, `gae`, `advantage`, `replay`,
-//!   `polyak`, `policy`): Composable components for custom algorithms.
+//! - [`env`] — Environment trait, spaces, vectorized environments, wrappers
+//! - [`envs`] — Built-in environments (CartPole)
+//! - [`algo`] — Algorithms (PPO, DQN)
+//! - [`nn`] — Neural network utilities (init, gradient clipping, polyak, losses, policy traits)
+//! - [`collect`] — Data collection (GAE, V-trace, replay buffer, advantage normalization)
 
-// Core abstractions
-pub mod space;
+/// Environment abstractions: trait, spaces, vectorized envs, wrappers.
 pub mod env;
-pub mod vec_env;
-pub mod wrapper;
-pub mod policy;
 
-// Building blocks
-pub mod clip;
-pub mod init;
-pub mod vtrace;
-pub mod replay;
-pub mod loss;
-pub mod advantage;
-pub mod gae;
-pub mod polyak;
-
-// Algorithms
-pub mod ppo;
-pub mod dqn;
-
-// Built-in environments
+/// Built-in environments (CartPole).
 pub mod envs;
 
-// Re-exports for convenience
-pub use space::Space;
+/// RL algorithms (PPO, DQN).
+pub mod algo;
+
+/// Neural network utilities for RL.
+pub mod nn;
+
+/// Data collection and advantage estimation.
+pub mod collect;
+
+// ---------------------------------------------------------------------------
+// Convenience re-exports
+// ---------------------------------------------------------------------------
+
+// Environment
+pub use env::space::Space;
+pub use env::vec_env::SyncVecEnv;
+pub use env::wrapper;
 pub use env::{Env, Step};
-pub use vec_env::SyncVecEnv;
-pub use replay::ReplayBuffer;
-pub use vtrace::vtrace_targets;
-pub use loss::{policy_loss_continuous, policy_loss_discrete, value_loss};
-pub use advantage::normalize;
-pub use gae::gae;
-pub use polyak::polyak_update;
-pub use init::orthogonal_linear;
-pub use policy::{DiscreteActorCritic, DiscreteAcOutput, Policy, greedy_action};
-pub use ppo::{PpoConfig, PpoRollout, PpoStats, ppo_collect, ppo_update};
-pub use dqn::{QNetwork, DqnConfig, DqnStats, Transition, dqn_update, epsilon_greedy, epsilon_schedule};
+
+// Algorithms
+pub use algo::dqn::{dqn_update, epsilon_greedy, epsilon_schedule, DqnConfig, DqnStats, QNetwork, Transition};
+pub use algo::ppo::{ppo_collect, ppo_update, PpoConfig, PpoRollout, PpoStats};
+
+// Neural network utilities
+pub use nn::clip::clip_grad_norm;
+pub use nn::init::orthogonal_linear;
+pub use nn::loss::{policy_loss_continuous, policy_loss_discrete, value_loss};
+pub use nn::policy::{greedy_action, DiscreteAcOutput, DiscreteActorCritic, Policy};
+pub use nn::polyak::polyak_update;
+
+// Data collection
+pub use collect::advantage::normalize;
+pub use collect::gae::gae;
+pub use collect::replay::ReplayBuffer;
+pub use collect::vtrace::vtrace_targets;

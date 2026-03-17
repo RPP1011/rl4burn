@@ -10,11 +10,9 @@ use burn::tensor::activation::relu;
 
 use rand::SeedableRng;
 
-use rl4burn::dqn::{dqn_update, epsilon_greedy, epsilon_schedule, DqnConfig, Transition};
-use rl4burn::env::Env;
 use rl4burn::envs::CartPole;
-use rl4burn::polyak::polyak_update;
-use rl4burn::replay::ReplayBuffer;
+use rl4burn::{dqn_update, epsilon_greedy, epsilon_schedule, DqnConfig, Env, Transition};
+use rl4burn::{polyak_update, ReplayBuffer};
 
 type AB = Autodiff<NdArray>;
 
@@ -39,7 +37,7 @@ impl<B: Backend> QNet<B> {
     }
 }
 
-impl<B: Backend> rl4burn::dqn::QNetwork<B> for QNet<B> {
+impl<B: Backend> rl4burn::QNetwork<B> for QNet<B> {
     fn q_values(&self, obs: Tensor<B, 2>) -> Tensor<B, 2> {
         let h = relu(self.fc1.forward(obs));
         let h = relu(self.fc2.forward(h));
