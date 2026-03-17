@@ -19,7 +19,7 @@ use burn::tensor::activation::{log_softmax, relu, softmax};
 use burn::tensor::backend::AutodiffBackend;
 use burn::tensor::TensorData;
 
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 // ---------------------------------------------------------------------------
 // Config

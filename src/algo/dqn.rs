@@ -20,7 +20,7 @@ use burn::prelude::*;
 use burn::tensor::backend::AutodiffBackend;
 use burn::tensor::TensorData;
 
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 // ---------------------------------------------------------------------------
 // Q-Network trait

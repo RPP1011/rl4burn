@@ -12,7 +12,7 @@
 
 use crate::env::{Env, Step};
 use crate::env::space::Space;
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 const GRAVITY: f32 = 9.8;
 const MASS_CART: f32 = 1.0;

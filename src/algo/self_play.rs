@@ -4,7 +4,7 @@
 //! opponent sampling, and [`branch_agent`] for creating new agents
 //! initialised from an existing agent's weights (with fresh optimizer state).
 
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 // ---------------------------------------------------------------------------
 // Policy snapshot

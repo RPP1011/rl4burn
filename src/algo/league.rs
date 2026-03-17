@@ -6,7 +6,7 @@
 
 use crate::algo::pfsp::{PfspConfig, PfspMatchmaking};
 use crate::algo::self_play::SelfPlayPool;
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 // ---------------------------------------------------------------------------
 // Agent roles

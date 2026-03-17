@@ -3,7 +3,7 @@
 //! Generic over sample type — users define their own sample struct.
 
 use contracts::*;
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 /// A replay buffer that stores samples with trajectory metadata.
 ///

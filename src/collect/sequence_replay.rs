@@ -4,7 +4,7 @@
 //! maintaining episode boundaries so sequences never cross episodes.
 //! Used by DreamerV3 for world model training (typically T=64 timesteps).
 
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 // ---------------------------------------------------------------------------
 // Timestep

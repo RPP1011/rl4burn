@@ -10,7 +10,7 @@ use burn::module::AutodiffModule;
 use burn::optim::AdamConfig;
 use burn::prelude::*;
 
-use rand::SeedableRng;
+use rand::{RngExt, SeedableRng};
 
 use rl4burn::env::space::Space;
 use rl4burn::{

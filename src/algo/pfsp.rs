@@ -4,7 +4,7 @@
 //! samples harder opponents more frequently. Used by league training to
 //! focus training compute on opponents the agent currently struggles against.
 
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 // ---------------------------------------------------------------------------
 // Player record

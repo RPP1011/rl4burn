@@ -7,7 +7,7 @@
 use burn::prelude::*;
 use burn::tensor::activation::{log_softmax, softmax};
 use burn::tensor::TensorData;
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 /// Describes one head in a composite action distribution.
 #[derive(Debug, Clone)]

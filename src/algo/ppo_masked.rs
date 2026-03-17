@@ -20,7 +20,7 @@ use burn::tensor::activation::relu;
 use burn::tensor::backend::AutodiffBackend;
 use burn::tensor::TensorData;
 
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 // ---------------------------------------------------------------------------
 // Model trait

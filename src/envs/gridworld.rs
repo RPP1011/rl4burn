@@ -12,7 +12,7 @@
 use crate::env::render::{Renderable, RgbFrame};
 use crate::env::space::Space;
 use crate::env::{Env, Step};
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 const GRID_SIZE: usize = 7;
 const MAX_STEPS: usize = 100;

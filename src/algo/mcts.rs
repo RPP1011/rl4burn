@@ -5,7 +5,7 @@
 //! user-supplied, making this suitable for both full rollout evaluation and
 //! neural-network value estimation.
 
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 // ---------------------------------------------------------------------------
 // Node

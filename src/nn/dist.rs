@@ -6,7 +6,7 @@
 use burn::prelude::*;
 use burn::tensor::activation::{log_softmax, softmax};
 use burn::tensor::TensorData;
-use rand::Rng;
+use rand::{Rng, RngExt};
 use std::f32::consts::PI;
 
 /// Minimum clamping bound for log_std in continuous distributions.

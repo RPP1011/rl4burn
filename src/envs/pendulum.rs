@@ -14,7 +14,7 @@
 use crate::env::render::{Renderable, RgbFrame};
 use crate::env::space::Space;
 use crate::env::{Env, Step};
-use rand::Rng;
+use rand::{Rng, RngExt};
 use std::f32::consts::PI;
 
 const GRAVITY: f32 = 10.0;
