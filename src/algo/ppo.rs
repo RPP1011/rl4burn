@@ -59,6 +59,12 @@ pub struct PpoConfig {
     /// When approx KL exceeds this threshold, remaining epochs are skipped.
     /// `None` disables early stopping (default). CleanRL uses `None` by default.
     pub target_kl: Option<f32>,
+    /// Dual-clip coefficient for pessimistic PPO (Ye et al., 2020).
+    /// When `Some(c)` with `c > 1` (typically 3.0), adds a floor of `c * advantage`
+    /// to the clipped surrogate objective for negative advantages, preventing
+    /// excessively negative objectives when the policy ratio deviates far.
+    /// `None` disables dual clipping (default, standard PPO behavior).
+    pub dual_clip_coef: Option<f32>,
 }
 
 impl Default for PpoConfig {
@@ -76,6 +82,7 @@ impl Default for PpoConfig {
             clip_vloss: true,
             max_grad_norm: 0.5,
             target_kl: None,
+            dual_clip_coef: None,
         }
     }
 }
@@ -426,11 +433,23 @@ where
             // Clipped surrogate objective
             let surr1 = ratio.clone() * adv_tensor.clone();
             let surr2 =
-                ratio.clamp(1.0 - config.clip_eps, 1.0 + config.clip_eps) * adv_tensor;
+                ratio.clamp(1.0 - config.clip_eps, 1.0 + config.clip_eps) * adv_tensor.clone();
             // min(surr1, surr2) = surr2 + min(surr1 - surr2, 0)
             //                   = surr2 - relu(surr2 - surr1)
             let min_surr = surr2.clone() - relu(surr2 - surr1);
-            let policy_loss: Tensor<B, 1> = min_surr.mean().neg().unsqueeze();
+            let policy_loss: Tensor<B, 1> = if let Some(c) = config.dual_clip_coef {
+                // Dual-clip PPO: when advantage < 0, add floor of c * advantage.
+                // dual_floor = c * min(adv, 0). When adv >= 0, dual_floor = 0.
+                // Since min_surr >= 0 when adv >= 0, max(min_surr, 0) = min_surr.
+                // So max(min_surr, dual_floor) is correct for all samples.
+                let neg_adv = adv_tensor.clone().neg().clamp_min(0.0).neg(); // min(adv, 0)
+                let dual_floor = neg_adv * c;
+                // max(a, b) = a + relu(b - a)
+                let dual_surr = min_surr.clone() + relu(dual_floor - min_surr);
+                dual_surr.mean().neg().unsqueeze()
+            } else {
+                min_surr.mean().neg().unsqueeze()
+            };
 
             // Value loss with optional clipping (CleanRL default: clipped)
             // Uses max(a,b) = a + relu(b - a) to avoid mask_where gradient issues.

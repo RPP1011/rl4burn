@@ -206,6 +206,7 @@ fn multi_discrete_ppo_learns_navigation() {
         clip_vloss: true,
         max_grad_norm: 0.5,
         target_kl: None,
+        dual_clip_coef: None,
     };
 
     let mut model = model;

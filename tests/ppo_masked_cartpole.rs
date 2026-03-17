@@ -96,6 +96,7 @@ fn masked_ppo_solves_cartpole() {
         clip_vloss: true,
         max_grad_norm: 0.5,
         target_kl: None,
+        dual_clip_coef: None,
     };
 
     let mut model = model;

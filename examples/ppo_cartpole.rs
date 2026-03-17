@@ -112,6 +112,7 @@ fn main() {
         clip_vloss: true,
         max_grad_norm: 0.5,
         target_kl: None,
+        dual_clip_coef: None,
     };
 
     let total_timesteps = 500_000;

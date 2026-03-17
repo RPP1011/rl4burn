@@ -10,7 +10,7 @@
 //! - [`envs`] — Built-in environments (CartPole)
 //! - [`algo`] — Algorithms (PPO, DQN)
 //! - [`nn`] — Neural network utilities (init, gradient clipping, polyak, losses, policy traits)
-//! - [`collect`] — Data collection (GAE, V-trace, replay buffer, advantage normalization)
+//! - [`collect`] — Data collection (GAE, V-trace, UPGO, replay buffer, advantage normalization)
 
 /// Environment abstractions: trait, spaces, vectorized envs, wrappers.
 pub mod env;
@@ -56,6 +56,7 @@ pub use nn::clip::clip_grad_norm;
 pub use nn::init::orthogonal_linear;
 pub use nn::loss::{policy_loss_continuous, policy_loss_discrete, value_loss};
 pub use nn::policy::{greedy_action, DiscreteAcOutput, DiscreteActorCritic};
+pub use nn::symlog::{symexp, symlog, TwohotEncoder};
 
 // Rendering
 pub use env::render::{Renderable, RgbFrame};
@@ -64,7 +65,9 @@ pub use nn::polyak::polyak_update;
 // Data collection
 pub use collect::advantage::normalize;
 pub use collect::gae::gae;
+pub use collect::percentile_normalize::PercentileNormalizer;
 pub use collect::replay::ReplayBuffer;
+pub use collect::upgo::upgo as upgo_advantages;
 pub use collect::vtrace::vtrace_targets;
 
 // Logging

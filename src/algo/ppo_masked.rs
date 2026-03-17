@@ -394,9 +394,18 @@ where
             // Clipped surrogate objective
             let surr1 = ratio.clone() * adv_tensor.clone();
             let surr2 =
-                ratio.clamp(1.0 - config.clip_eps, 1.0 + config.clip_eps) * adv_tensor;
+                ratio.clamp(1.0 - config.clip_eps, 1.0 + config.clip_eps) * adv_tensor.clone();
             let min_surr = surr2.clone() - relu(surr2 - surr1);
-            let policy_loss: Tensor<B, 1> = min_surr.mean().neg().unsqueeze();
+            let policy_loss: Tensor<B, 1> = if let Some(c) = config.dual_clip_coef {
+                // Dual-clip PPO: when advantage < 0, add floor of c * advantage.
+                let neg_adv = adv_tensor.clone().neg().clamp_min(0.0).neg(); // min(adv, 0)
+                let dual_floor = neg_adv * c;
+                // max(a, b) = a + relu(b - a)
+                let dual_surr = min_surr.clone() + relu(dual_floor - min_surr);
+                dual_surr.mean().neg().unsqueeze()
+            } else {
+                min_surr.mean().neg().unsqueeze()
+            };
 
             // Value loss with optional clipping
             let value_loss: Tensor<B, 1> = if config.clip_vloss {
