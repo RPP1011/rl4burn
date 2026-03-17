@@ -35,6 +35,7 @@ pub mod log;
 // ---------------------------------------------------------------------------
 
 // Environment
+pub use env::adapter::DiscreteEnvAdapter;
 pub use env::space::Space;
 pub use env::vec_env::SyncVecEnv;
 pub use env::wrapper;
@@ -43,6 +44,12 @@ pub use env::{Env, Step};
 // Algorithms
 pub use algo::dqn::{dqn_update, epsilon_greedy, epsilon_schedule, DqnConfig, DqnStats, QNetwork, Transition};
 pub use algo::ppo::{ppo_collect, ppo_update, PpoConfig, PpoRollout, PpoStats};
+pub use algo::ppo_masked::{
+    masked_ppo_collect, masked_ppo_update, MaskedActorCritic, MaskedPpoRollout,
+};
+
+// Action distributions
+pub use nn::dist::{ActionDist, LogStdMode};
 
 // Neural network utilities
 pub use nn::clip::clip_grad_norm;

@@ -72,6 +72,26 @@ impl<E: Env> SyncVecEnv<E> {
     pub fn action_space(&self) -> Space {
         self.envs[0].action_space()
     }
+
+    /// Collect action masks from all environments.
+    ///
+    /// Returns `None` if no environment provides masks.
+    /// When at least one env provides masks, envs without masks get all-ones masks.
+    pub fn action_masks(&self) -> Option<Vec<Vec<f32>>> {
+        let masks: Vec<Option<Vec<f32>>> = self.envs.iter().map(|e| e.action_mask()).collect();
+
+        if masks.iter().all(|m| m.is_none()) {
+            return None;
+        }
+
+        let mask_len = self.action_space().flat_dim();
+        Some(
+            masks
+                .into_iter()
+                .map(|m| m.unwrap_or_else(|| vec![1.0; mask_len]))
+                .collect(),
+        )
+    }
 }
 
 #[cfg(test)]

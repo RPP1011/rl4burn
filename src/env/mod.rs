@@ -3,6 +3,7 @@
 //! Follows modern Gymnasium conventions: separate `terminated` and `truncated`
 //! flags, auto-reset semantics for vectorized environments.
 
+pub mod adapter;
 pub mod space;
 pub mod vec_env;
 pub mod wrapper;
@@ -49,4 +50,14 @@ pub trait Env {
 
     /// Description of the action space.
     fn action_space(&self) -> Space;
+
+    /// Return a flat validity mask for the current state.
+    ///
+    /// Length must equal `action_space().flat_dim()` (or sum of nvec for MultiDiscrete).
+    /// `1.0` = valid, `0.0` = invalid.
+    ///
+    /// Default: all actions valid (returns `None`).
+    fn action_mask(&self) -> Option<Vec<f32>> {
+        None
+    }
 }
