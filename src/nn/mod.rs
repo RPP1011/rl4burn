@@ -1,3 +1,5 @@
+pub mod attention;
+pub mod autoregressive;
 pub mod clip;
 pub mod dist;
 pub mod film;

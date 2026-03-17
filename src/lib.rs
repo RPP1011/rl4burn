@@ -49,9 +49,15 @@ pub use algo::ppo_masked::{
 };
 
 // Action distributions
+pub use nn::autoregressive::{ActionHead, CompositeDistribution};
 pub use nn::dist::{ActionDist, LogStdMode};
 
 // Neural network utilities
+pub use nn::attention::{
+    AttentionPool, AttentionPoolConfig, MultiHeadAttention, MultiHeadAttentionConfig, PointerNet,
+    PointerNetConfig, TargetAttention, TargetAttentionConfig, TransformerBlock,
+    TransformerBlockConfig, TransformerEncoder, TransformerEncoderConfig,
+};
 pub use nn::clip::clip_grad_norm;
 pub use nn::film::{Film, FilmConfig};
 pub use nn::init::orthogonal_linear;
