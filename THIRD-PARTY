@@ -1,0 +1,20 @@
+This project makes use of the following third-party works:
+
+--------------------------------------------------------------------------------
+
+Burn
+https://github.com/tracel-ai/burn
+Licensed under MIT OR Apache-2.0
+
+Burn is the ML framework that rl4burn builds on. All neural network training,
+tensor operations, and autodiff functionality are provided by Burn.
+
+--------------------------------------------------------------------------------
+
+CleanRL
+https://github.com/vwxyzjn/cleanrl
+Licensed under MIT
+
+The PPO implementation in rl4burn closely follows CleanRL's ppo.py in terms of
+algorithm architecture and hyperparameter choices. CleanRL served as the primary
+reference for our Proximal Policy Optimization implementation.

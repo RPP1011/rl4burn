@@ -1,0 +1,11 @@
+[book]
+title = "rl4burn"
+authors = ["Ricky"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "build"
+
+[output.html]
+git-repository-url = "https://github.com/RPP1011/rl4burn"

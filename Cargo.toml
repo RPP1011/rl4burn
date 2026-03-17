@@ -3,7 +3,7 @@ name = "rl4burn"
 version = "0.1.0"
 edition = "2021"
 description = "Reinforcement learning algorithms for the Burn ML framework"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 [dependencies]
 burn = { version = "0.20", default-features = false, features = ["std"] }
