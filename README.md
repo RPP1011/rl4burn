@@ -6,6 +6,7 @@ Write your algorithm once with `B: AutodiffBackend` and run it on WGPU, CUDA, Nd
 
 ### Note
 The book (and this repo to a lesser extent) is way too specific to supporting my [game AI project](https://github.com/RPP1011/super-duper-octo-spork). You may get some use out of it regardless, but I will work on making those more general later.
+Also some parts are just wrong or no longer reflect the current state of the repo, like the rest of this README :).
 
 ## Algorithms
 
