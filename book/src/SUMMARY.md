@@ -29,6 +29,7 @@
 - [Orthogonal Initialization](./building-blocks/init.md)
 - [Global Gradient Clipping](./building-blocks/grad-clip.md)
 - [Logging](./building-blocks/logging.md)
+- [Saving & Sharing](./building-blocks/saving-sharing.md)
 
 # Burn Compatibility
 
