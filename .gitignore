@@ -1,2 +1,5 @@
 /target
 /book/build
+/.venv
+/runs
+/checkpoints

@@ -274,7 +274,7 @@ impl TensorBoardLogger {
         // Write file_version event (required by TensorBoard)
         let mut event = Vec::new();
         encode_double(&mut event, 1, wall_time());
-        encode_bytes(&mut event, 6, b"brain.Event:2");
+        encode_bytes(&mut event, 3, b"brain.Event:2");
         write_record(&mut writer, &event)?;
 
         Ok(Self { writer })
