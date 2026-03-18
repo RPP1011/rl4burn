@@ -1,0 +1,17 @@
+[package]
+name = "rl4burn-algo"
+version.workspace = true
+edition.workspace = true
+description = "RL algorithms for rl4burn: PPO, DQN, AC, imitation, multi-agent, planning"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+burn = { workspace = true }
+rand = { workspace = true }
+rl4burn-core = { path = "../rl4burn-core" }
+rl4burn-nn = { path = "../rl4burn-nn" }
+rl4burn-collect = { path = "../rl4burn-collect" }
+
+[dev-dependencies]
+burn = { workspace = true, features = ["ndarray", "autodiff"] }

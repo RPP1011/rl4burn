@@ -1,29 +1,24 @@
-[package]
-name = "rl4burn"
-version = "0.1.1"
+[workspace]
+members = [
+    "crates/rl4burn-core",
+    "crates/rl4burn-nn",
+    "crates/rl4burn-collect",
+    "crates/rl4burn-algo",
+    "crates/rl4burn-envs",
+    "rl4burn",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.2.0"
 edition = "2021"
-description = "Reinforcement learning algorithms for the Burn ML framework"
 license = "MIT"
 repository = "https://github.com/RPP1011/rl4burn"
-homepage = "https://github.com/RPP1011/rl4burn"
-keywords = ["rl", "burn", "ppo", "dqn", "game-ai"]
-categories = ["science", "game-development"]
-readme = "README.md"
 
-[dependencies]
+[workspace.dependencies]
 burn = { version = "0.20", default-features = false, features = ["std"] }
 contracts = "0.6"
 rand = "0.10"
 rand_distr = "0.6"
-crc32c = { version = "0.6", optional = true }
-gif = { version = "0.13", optional = true }
-
-[dev-dependencies]
-burn = { version = "0.20", default-features = false, features = ["std", "ndarray", "autodiff"] }
-
-[features]
-default = []
-ndarray = ["burn/ndarray"]
-tensorboard = ["crc32c"]
-json-log = []
-video = ["gif"]
+crc32c = { version = "0.6" }
+gif = { version = "0.13" }

@@ -1,0 +1,29 @@
+[package]
+name = "rl4burn"
+version.workspace = true
+edition.workspace = true
+description = "Reinforcement learning algorithms for the Burn ML framework"
+license.workspace = true
+repository.workspace = true
+homepage = "https://github.com/RPP1011/rl4burn"
+keywords = ["rl", "burn", "ppo", "dqn", "game-ai"]
+categories = ["science", "game-development"]
+readme = "../README.md"
+
+[dependencies]
+rl4burn-core = { path = "../crates/rl4burn-core" }
+rl4burn-nn = { path = "../crates/rl4burn-nn" }
+rl4burn-collect = { path = "../crates/rl4burn-collect" }
+rl4burn-algo = { path = "../crates/rl4burn-algo" }
+rl4burn-envs = { path = "../crates/rl4burn-envs" }
+
+[dev-dependencies]
+burn = { workspace = true, features = ["ndarray", "autodiff"] }
+rand = { workspace = true }
+
+[features]
+default = []
+ndarray = ["rl4burn-core/ndarray"]
+tensorboard = ["rl4burn-core/tensorboard"]
+json-log = ["rl4burn-core/json-log"]
+video = ["rl4burn-core/video"]

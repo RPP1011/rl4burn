@@ -1,0 +1,14 @@
+[package]
+name = "rl4burn-collect"
+version.workspace = true
+edition.workspace = true
+description = "Data collection and advantage estimation for rl4burn: GAE, V-trace, replay buffers"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+burn = { workspace = true }
+contracts = { workspace = true }
+rand = { workspace = true }
+rl4burn-core = { path = "../rl4burn-core" }
+rl4burn-nn = { path = "../rl4burn-nn" }

@@ -1,0 +1,18 @@
+[package]
+name = "rl4burn-core"
+version.workspace = true
+edition.workspace = true
+description = "Core traits and abstractions for rl4burn: environments, spaces, logging"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+crc32c = { workspace = true, optional = true }
+gif = { workspace = true, optional = true }
+
+[features]
+default = []
+tensorboard = ["crc32c"]
+json-log = []
+video = ["gif"]
+ndarray = []

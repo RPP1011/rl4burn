@@ -1,0 +1,12 @@
+[package]
+name = "rl4burn-nn"
+version.workspace = true
+edition.workspace = true
+description = "Neural network building blocks for rl4burn: init, clipping, attention, RNN, VAE"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+burn = { workspace = true }
+rand = { workspace = true }
+rand_distr = { workspace = true }

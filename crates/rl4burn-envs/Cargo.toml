@@ -1,0 +1,11 @@
+[package]
+name = "rl4burn-envs"
+version.workspace = true
+edition.workspace = true
+description = "Built-in environments for rl4burn: CartPole, Pendulum, GridWorld"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rand = { workspace = true }
+rl4burn-core = { path = "../rl4burn-core" }
