@@ -120,6 +120,8 @@ impl<R: Rng> Env for GridWorld<R> {
     }
 }
 
+use crate::render_util::{set_pixel, draw_rect};
+
 impl<R> Renderable for GridWorld<R> {
     fn render(&self) -> RgbFrame {
         let cell = 40u16; // pixels per cell
@@ -155,15 +157,6 @@ impl<R> Renderable for GridWorld<R> {
     }
 }
 
-fn set_pixel(pixels: &mut [u8], canvas_w: u16, x: i32, y: i32, color: [u8; 3]) {
-    let w = canvas_w as i32;
-    let h = pixels.len() as i32 / 3 / w;
-    if x >= 0 && x < w && y >= 0 && y < h {
-        let idx = (y * w + x) as usize * 3;
-        pixels[idx..idx + 3].copy_from_slice(&color);
-    }
-}
-
 fn fill_cell(
     pixels: &mut [u8],
     canvas_w: u16,
@@ -176,14 +169,7 @@ fn fill_cell(
     let y0 = row as i32 * cell_size as i32 + 2;
     let x1 = x0 + cell_size as i32 - 4;
     let y1 = y0 + cell_size as i32 - 4;
-    let w = canvas_w as i32;
-    let h = pixels.len() as i32 / 3 / w;
-    for y in y0.max(0)..y1.min(h) {
-        for x in x0.max(0)..x1.min(w) {
-            let idx = (y * w + x) as usize * 3;
-            pixels[idx..idx + 3].copy_from_slice(&color);
-        }
-    }
+    draw_rect(pixels, canvas_w, x0, y0, x1, y1, color);
 }
 
 #[cfg(test)]

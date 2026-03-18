@@ -110,6 +110,8 @@ impl<R: Rng> Env for Pendulum<R> {
     }
 }
 
+use crate::render_util::{draw_circle, draw_thick_line};
+
 impl<R> Renderable for Pendulum<R> {
     fn render(&self) -> RgbFrame {
         let w: u16 = 400;
@@ -137,78 +139,6 @@ impl<R> Renderable for Pendulum<R> {
             width: w,
             height: h,
             data: pixels,
-        }
-    }
-}
-
-fn draw_circle(
-    pixels: &mut [u8],
-    canvas_w: u16,
-    canvas_h: u16,
-    cx: i32,
-    cy: i32,
-    r: i32,
-    color: [u8; 3],
-) {
-    let w = canvas_w as i32;
-    let h = canvas_h as i32;
-    for dy in -r..=r {
-        for dx in -r..=r {
-            if dx * dx + dy * dy <= r * r {
-                let px = cx + dx;
-                let py = cy + dy;
-                if px >= 0 && px < w && py >= 0 && py < h {
-                    let idx = (py * w + px) as usize * 3;
-                    pixels[idx..idx + 3].copy_from_slice(&color);
-                }
-            }
-        }
-    }
-}
-
-fn draw_thick_line(
-    pixels: &mut [u8],
-    canvas_w: u16,
-    canvas_h: u16,
-    x0: i32,
-    y0: i32,
-    x1: i32,
-    y1: i32,
-    thickness: i32,
-    color: [u8; 3],
-) {
-    let dx = (x1 - x0).abs();
-    let dy = -(y1 - y0).abs();
-    let sx = if x0 < x1 { 1 } else { -1 };
-    let sy = if y0 < y1 { 1 } else { -1 };
-    let mut err = dx + dy;
-    let mut cx = x0;
-    let mut cy = y0;
-    let w = canvas_w as i32;
-    let h = canvas_h as i32;
-
-    loop {
-        for oy in -(thickness / 2)..=(thickness / 2) {
-            for ox in -(thickness / 2)..=(thickness / 2) {
-                let px = cx + ox;
-                let py = cy + oy;
-                if px >= 0 && px < w && py >= 0 && py < h {
-                    let idx = (py * w + px) as usize * 3;
-                    pixels[idx..idx + 3].copy_from_slice(&color);
-                }
-            }
-        }
-        if cx == x1 && cy == y1 {
-            break;
-        }
-        let e2 = 2 * err;
-        if e2 >= dy {
-            err += dy;
-            cx += sx;
-        }
-        if e2 <= dx {
-            err += dx;
-            cy += sy;
         }
     }
 }
