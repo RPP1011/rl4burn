@@ -13,6 +13,14 @@ members = [
     "examples/self-play",
     "examples/ppo-continuous",
     "examples/ppo-multi-discrete",
+    "examples/reward-shaping",
+    "examples/diagnostics",
+    "examples/hyperparameter-tuning",
+    "examples/curriculum",
+    "examples/deploy-policy",
+    "examples/action-masking",
+    "examples/lstm-policy",
+    "examples/multi-agent",
 ]
 resolver = "2"
 
