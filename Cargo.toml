@@ -9,6 +9,10 @@ members = [
     "examples/quickstart",
     "examples/config-driven",
     "examples/custom-env",
+    "examples/ppo-annotated",
+    "examples/self-play",
+    "examples/ppo-continuous",
+    "examples/ppo-multi-discrete",
 ]
 resolver = "2"
 
