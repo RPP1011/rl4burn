@@ -4,6 +4,19 @@ Reinforcement learning library for the [Burn](https://burn.dev) deep learning fr
 
 Write your model once with `B: Backend` and train it on **NdArray** (CPU), **WGPU** (GPU), **CUDA**, or **LibTorch** with zero code changes.
 
+## Architecture
+
+rl4burn is a Cargo workspace of focused crates. The umbrella `rl4burn` crate re-exports everything, so most users only need one dependency.
+
+| Crate | What it provides |
+|-------|-----------------|
+| **rl4burn-core** | `Env` trait, spaces, `SyncVecEnv`, wrappers, `Logger` |
+| **rl4burn-nn** | Orthogonal init, gradient clipping, polyak, attention, RNN, VAE |
+| **rl4burn-collect** | GAE, V-trace, replay buffers, actor-learner, centralized inference |
+| **rl4burn-algo** | PPO, DQN, AC, imitation, multi-agent, planning, loss functions |
+| **rl4burn-envs** | CartPole, Pendulum, GridWorld |
+| **rl4burn** | Umbrella — re-exports the full API surface |
+
 ## Algorithms
 
 | Algorithm | Action space | Model trait | Status |
@@ -18,7 +31,7 @@ Write your model once with `B: Backend` and train it on **NdArray** (CPU), **WGP
 [dependencies]
 rl4burn = { git = "https://github.com/RPP1011/rl4burn" }
 burn = { version = "0.20", features = ["std", "ndarray", "autodiff"] }
-rand = "0.9"
+rand = "0.10"
 ```
 
 ### PPO on CartPole (discrete)
@@ -32,9 +45,7 @@ use burn::prelude::*;
 use rand::SeedableRng;
 
 use rl4burn::envs::CartPole;
-use rl4burn::policy::{DiscreteAcOutput, DiscreteActorCritic};
-use rl4burn::ppo::{ppo_collect, ppo_update, PpoConfig};
-use rl4burn::vec_env::SyncVecEnv;
+use rl4burn::{DiscreteAcOutput, DiscreteActorCritic, ppo_collect, ppo_update, PpoConfig, SyncVecEnv};
 
 #[derive(Module, Debug)]
 struct ActorCritic<B: Backend> {
@@ -87,13 +98,15 @@ fn main() {
     let mut model: ActorCritic<AB> = ActorCritic::new(&device);
     let mut optim = AdamConfig::new().with_epsilon(1e-5).init();
     let config = PpoConfig::default();
+    let mut current_obs = vec_env.reset();
     let mut ep_acc = vec![0.0f32; n_envs];
 
     for iter in 0..100 {
         let rollout = ppo_collect::<burn::backend::NdArray, _, _>(
-            &model.valid(), &mut vec_env, &config, &device, &mut rng, &mut ep_acc,
+            &model.valid(), &mut vec_env, &config, &device, &mut rng,
+            &mut current_obs, &mut ep_acc,
         );
-        let (new_model, stats) = ppo_update(
+        let (new_model, _stats) = ppo_update(
             model, &mut optim, &rollout, &config, config.lr, &device, &mut rng,
         );
         model = new_model;
@@ -148,9 +161,7 @@ impl Env for MyEnv {
 ### DQN on CartPole
 
 ```rust
-use rl4burn::dqn::*;
-use rl4burn::replay::ReplayBuffer;
-use rl4burn::polyak::polyak_update;
+use rl4burn::{dqn_update, epsilon_greedy, epsilon_schedule, DqnConfig, ReplayBuffer, Transition, polyak_update};
 
 let config = DqnConfig::default();
 let mut buffer = ReplayBuffer::new(config.buffer_capacity, rng);
@@ -168,6 +179,53 @@ for step in 0..50_000 {
     }
 }
 ```
+
+## Cookbook
+
+15 runnable examples from beginner to advanced. Each is a standalone workspace member.
+
+### Getting started
+| Example | Run | What you learn |
+|---------|-----|---------------|
+| **quickstart** | `cargo run -p quickstart --release` | CartPole PPO in ~50 lines |
+| **config-driven** | `cargo run -p config-driven --release` | TOML config with CLI override |
+| **custom-env** | `cargo run -p custom-env --release` | Implementing the `Env` trait |
+
+### Algorithm deep-dives
+| Example | Run | What you learn |
+|---------|-----|---------------|
+| **ppo-annotated** | `cargo run -p ppo-annotated --release` | Every PPO implementation detail explained |
+| **ppo-continuous** | `cargo run -p ppo-continuous --release` | Gaussian policy, observation/reward normalization |
+| **ppo-multi-discrete** | `cargo run -p ppo-multi-discrete --release` | Multi-discrete actions with boundary masking |
+| **self-play** | `cargo run -p self-play --release` | SelfPlayPool + PFSP matchmaking |
+
+### Practical engineering
+| Example | Run | What you learn |
+|---------|-----|---------------|
+| **reward-shaping** | `cargo run -p reward-shaping --release` | Intrinsic rewards for sparse-reward envs |
+| **diagnostics** | `cargo run -p diagnostics --release` | Metric health checks and debugging |
+| **hyperparameter-tuning** | `cargo run -p hyperparameter-tuning --release` | Grid search with results table |
+
+### Advanced topics
+| Example | Run | What you learn |
+|---------|-----|---------------|
+| **action-masking** | `cargo run -p action-masking --release` | Dynamic legal-move masking for card games |
+| **lstm-policy** | `cargo run -p lstm-policy --release` | Recurrent policies for partial observability |
+| **multi-agent** | `cargo run -p multi-agent --release` | 2v2 team game with shared weights |
+| **curriculum** | `cargo run -p curriculum --release` | Progressive difficulty levels |
+| **deploy-policy** | `cargo run -p deploy-policy --release` | Train, save, load for inference |
+
+### Which algorithm should I use?
+
+| Scenario | Recommendation |
+|----------|---------------|
+| Discrete actions | PPO (`DiscreteActorCritic`) or DQN (`QNetwork`) |
+| Continuous actions | PPO-continuous (`MaskedActorCritic` + `ActionDist::Continuous`) |
+| Multi-discrete actions | PPO (`MaskedActorCritic` + `ActionDist::MultiDiscrete`) |
+| Invalid actions vary per state | Masked PPO with `action_mask()` |
+| Competitive game | Self-play PPO with `SelfPlayPool` |
+| Partial observability | LSTM policy with custom training loop |
+| Need sample efficiency | DQN with `ReplayBuffer` |
 
 ## Environments
 
@@ -197,13 +255,13 @@ Wrappers: `EpisodeStats`, `NormalizeObservation`, `NormalizeReward`, `DiscreteEn
 
 | Module | Description |
 |--------|-------------|
-| `gae::gae` | Generalized Advantage Estimation |
-| `vtrace::vtrace_targets` | V-trace off-policy correction |
-| `replay::ReplayBuffer` | FIFO replay buffer with uniform sampling |
-| `polyak::polyak_update` | Soft/hard target network updates |
-| `nn::dist::ActionDist` | Discrete, MultiDiscrete, and Continuous distributions with masking |
-| `init::orthogonal_linear` | Orthogonal weight init (CleanRL's `layer_init`) |
-| `clip::clip_grad_norm` | Global gradient norm clipping (PyTorch-compatible) |
+| `gae` | Generalized Advantage Estimation |
+| `vtrace_targets` | V-trace off-policy correction |
+| `ReplayBuffer` | FIFO replay buffer with uniform sampling |
+| `polyak_update` | Soft/hard target network updates |
+| `ActionDist` | Discrete, MultiDiscrete, and Continuous distributions with masking |
+| `orthogonal_linear` | Orthogonal weight init (CleanRL's `layer_init`) |
+| `clip_grad_norm` | Global gradient norm clipping (PyTorch-compatible) |
 
 ## Extras
 
@@ -212,8 +270,7 @@ The library also includes building blocks for more advanced use cases — neural
 ## Logging and visualization
 
 ```bash
-cargo run --release --example ppo_cartpole --features "ndarray,tensorboard"
-tensorboard --logdir runs/
+cargo run -p quickstart --release  # basic training output
 ```
 
 | Feature flag | What you get |
@@ -225,7 +282,7 @@ tensorboard --logdir runs/
 ## Tests
 
 ```bash
-cargo test --release
+cargo test --workspace --release
 ```
 
 ```

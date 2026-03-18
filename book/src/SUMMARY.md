@@ -2,10 +2,18 @@
 
 [Introduction](./introduction.md)
 
+# Architecture
+
+- [Workspace Structure](./architecture.md)
+
 # Getting Started
 
 - [Installation](./getting-started/installation.md)
 - [Your First Agent: PPO on CartPole](./getting-started/first-agent.md)
+
+# Cookbook
+
+- [Examples Overview](./cookbook.md)
 
 # Core Concepts
 

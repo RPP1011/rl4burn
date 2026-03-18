@@ -6,8 +6,10 @@ Add rl4burn and Burn to your `Cargo.toml`:
 [dependencies]
 rl4burn = { git = "https://github.com/RPP1011/rl4burn" }
 burn = { version = "0.20", features = ["std", "ndarray", "autodiff"] }
-rand = "0.9"
+rand = "0.10"
 ```
+
+rl4burn is a workspace of focused crates (`rl4burn-core`, `rl4burn-nn`, `rl4burn-collect`, `rl4burn-algo`, `rl4burn-envs`), but the umbrella `rl4burn` crate re-exports everything so you only need one dependency.
 
 The `ndarray` feature gives you a CPU backend for development and testing. For GPU training, add `wgpu` or `tch` (LibTorch) instead.
 

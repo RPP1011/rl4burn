@@ -32,6 +32,22 @@ Self-play with opponent pools. League training with agent roles (AlphaStar-style
 
 GAE, V-trace, UPGO, replay buffers, multi-head value decomposition, intrinsic rewards, polyak updates, loss functions, orthogonal initialization, global gradient clipping, and logging.
 
+## Workspace architecture
+
+rl4burn is organized as a Cargo workspace of five focused crates (`rl4burn-core`, `rl4burn-nn`, `rl4burn-collect`, `rl4burn-algo`, `rl4burn-envs`) plus an umbrella `rl4burn` crate that re-exports the full API. Users depend only on `rl4burn` — no need to manage individual crate dependencies. See the [Architecture](./architecture.md) chapter for details.
+
+## Cookbook
+
+The repository includes 15 runnable examples organized into five tiers:
+
+1. **Fundamentals** — quickstart, annotated PPO, config-driven training
+2. **Environment Variations** — custom environments, continuous actions, multi-discrete actions
+3. **Techniques** — action masking, reward shaping, LSTM policies
+4. **Multi-Agent & Game AI** — self-play, multi-agent, curriculum learning
+5. **Production** — diagnostics, hyperparameter tuning, policy deployment
+
+Run any example with `cargo run -p <name> --release`. See the [Cookbook](./cookbook.md) for the full list and a decision guide for choosing the right algorithm.
+
 ## Why Burn?
 
 Burn's `Backend` trait lets you write generic code:

@@ -10,7 +10,7 @@ PPO needs an actor-critic model: given an observation, produce action logits and
 use burn::module::Module;
 use burn::nn::{Linear, LinearConfig};
 use burn::prelude::*;
-use rl4burn::policy::{DiscreteAcOutput, DiscreteActorCritic};
+use rl4burn::{DiscreteAcOutput, DiscreteActorCritic};
 
 #[derive(Module, Debug)]
 struct ActorCritic<B: Backend> {
@@ -62,7 +62,7 @@ CartPole is built in. Wrap it in `SyncVecEnv` to run multiple copies in parallel
 
 ```rust,ignore
 use rl4burn::envs::CartPole;
-use rl4burn::vec_env::SyncVecEnv;
+use rl4burn::SyncVecEnv;
 use rand::SeedableRng;
 
 let n_envs = 4;
@@ -82,7 +82,7 @@ PPO training alternates between two phases: **collect** a rollout of experience,
 use burn::backend::{Autodiff, NdArray};
 use burn::module::AutodiffModule;
 use burn::optim::AdamConfig;
-use rl4burn::ppo::{ppo_collect, ppo_update, PpoConfig};
+use rl4burn::{ppo_collect, ppo_update, PpoConfig};
 use rl4burn::{Loggable, Logger, PrintLogger};
 
 type AB = Autodiff<NdArray>;
@@ -97,6 +97,8 @@ let mut logger = PrintLogger::new(0);
 
 // Episode return accumulator — persists across rollouts
 let mut ep_acc = vec![0.0f32; n_envs];
+// Current observations — persists across rollouts
+let mut current_obs = vec_env.reset();
 
 for iter in 0..100 {
     // Collect: use the non-autodiff model for inference
@@ -106,6 +108,7 @@ for iter in 0..100 {
         &config,
         &device,
         &mut rng,
+        &mut current_obs,
         &mut ep_acc,
     );
 
@@ -132,6 +135,7 @@ logger.flush();
 
 Key points:
 - `model.valid()` strips the autodiff layer for efficient inference during collection.
+- `current_obs` holds the latest observations from the environments, persisting across rollout boundaries so the next collection starts from where the last one left off.
 - `ep_acc` tracks per-env cumulative reward across rollout boundaries. Without this, episodes longer than `n_steps` would have their returns split.
 - `ppo_update` returns the updated model (Burn modules are moved through optimizers, not mutated in place).
 - `stats.log(...)` uses the `Loggable` trait to log all PPO metrics. See the [Logging](../building-blocks/logging.md) chapter for details on logger setup.
@@ -139,7 +143,7 @@ Key points:
 ## Run it
 
 ```bash
-cargo run --release --example ppo_cartpole --features ndarray
+cargo run -p quickstart --release
 ```
 
 You should see episode returns climb from ~20 (random policy) to 500 (solved) within seconds.

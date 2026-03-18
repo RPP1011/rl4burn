@@ -46,10 +46,10 @@ impl<B: Backend> QNetwork<B> for QNet<B> {
 DQN differs from PPO: it uses a **single environment**, a **replay buffer**, and **epsilon-greedy** exploration.
 
 ```rust,ignore
-use rl4burn::dqn::*;
-use rl4burn::replay::ReplayBuffer;
-use rl4burn::polyak::polyak_update;
-use rl4burn::env::Env;
+use rl4burn::{dqn_update, epsilon_greedy, epsilon_schedule, DqnConfig, Transition};
+use rl4burn::ReplayBuffer;
+use rl4burn::polyak_update;
+use rl4burn::Env;
 
 let config = DqnConfig::default();
 let mut buffer = ReplayBuffer::new(config.buffer_capacity, rand::rngs::SmallRng::seed_from_u64(42));
