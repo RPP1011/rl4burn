@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 crc32c = { workspace = true, optional = true }
 gif = { workspace = true, optional = true }
+thiserror = { workspace = true }
 
 [features]
 default = []

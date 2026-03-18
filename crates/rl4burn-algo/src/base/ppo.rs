@@ -30,30 +30,41 @@ use rand::{Rng, RngExt};
 /// Defaults match CleanRL's `ppo.py`. Configure gradient clipping
 /// (typically `max_grad_norm=0.5`) on your optimizer — e.g. via
 /// `AdamConfig::new().with_grad_clipping(Some(GradientClippingConfig::Norm(0.5)))`.
-#[derive(Debug, Clone)]
+#[derive(Debug, burn::config::Config)]
 pub struct PpoConfig {
     /// Learning rate for the optimizer.
+    #[config(default = 2.5e-4)]
     pub lr: f64,
     /// Discount factor γ.
+    #[config(default = 0.99)]
     pub gamma: f32,
     /// GAE smoothing parameter λ.
+    #[config(default = 0.95)]
     pub gae_lambda: f32,
     /// Clipping range ε for the policy ratio.
+    #[config(default = 0.2)]
     pub clip_eps: f32,
     /// Value loss coefficient.
+    #[config(default = 0.5)]
     pub vf_coef: f32,
     /// Entropy bonus coefficient.
+    #[config(default = 0.01)]
     pub ent_coef: f32,
     /// Number of optimization epochs per rollout.
+    #[config(default = 4)]
     pub update_epochs: usize,
     /// Minibatch size for each gradient step.
+    #[config(default = 128)]
     pub minibatch_size: usize,
     /// Number of steps to collect per environment per rollout.
+    #[config(default = 128)]
     pub n_steps: usize,
     /// Whether to clip the value function loss (CleanRL default: true).
+    #[config(default = true)]
     pub clip_vloss: bool,
     /// Maximum gradient norm for global gradient clipping (0.0 = disabled).
     /// Matches PyTorch's `clip_grad_norm_` (global, not per-parameter).
+    #[config(default = 0.5)]
     pub max_grad_norm: f32,
     /// Target KL divergence for early stopping of update epochs.
     /// When approx KL exceeds this threshold, remaining epochs are skipped.
@@ -65,26 +76,6 @@ pub struct PpoConfig {
     /// excessively negative objectives when the policy ratio deviates far.
     /// `None` disables dual clipping (default, standard PPO behavior).
     pub dual_clip_coef: Option<f32>,
-}
-
-impl Default for PpoConfig {
-    fn default() -> Self {
-        Self {
-            lr: 2.5e-4,
-            gamma: 0.99,
-            gae_lambda: 0.95,
-            clip_eps: 0.2,
-            vf_coef: 0.5,
-            ent_coef: 0.01,
-            update_epochs: 4,
-            minibatch_size: 128,
-            n_steps: 128,
-            clip_vloss: true,
-            max_grad_norm: 0.5,
-            target_kl: None,
-            dual_clip_coef: None,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

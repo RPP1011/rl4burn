@@ -137,18 +137,32 @@ pub struct NormalizeObservation<E> {
 }
 
 impl<E: Env<Observation = Vec<f32>>> NormalizeObservation<E> {
-    pub fn new(inner: E, clip: f32) -> Self {
+    /// Creates a new `NormalizeObservation` wrapper.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Rl4BurnError::Environment`] if the inner environment's
+    /// observation space is not `Space::Box`.
+    pub fn new(inner: E, clip: f32) -> crate::error::Result<Self> {
         let dim = match inner.observation_space() {
             Space::Box { ref low, .. } => low.len(),
-            _ => panic!("NormalizeObservation requires a Box observation space"),
+            other => {
+                return Err(crate::error::Rl4BurnError::Environment {
+                    message: format!(
+                        "NormalizeObservation requires a Box observation space, got {:?}",
+                        other
+                    ),
+                    source: None,
+                });
+            }
         };
-        Self {
+        Ok(Self {
             inner,
             mean: vec![0.0; dim],
             var: vec![1.0; dim],
             count: 1e-4, // small epsilon to avoid division by zero
             clip,
-        }
+        })
     }
 
     fn update_stats(&mut self, obs: &[f32]) {

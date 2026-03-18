@@ -1,0 +1,12 @@
+[package]
+name = "config-driven"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+rl4burn = { path = "../../rl4burn" }
+burn = { version = "0.20", features = ["ndarray", "autodiff"] }
+rand = "0.10"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"

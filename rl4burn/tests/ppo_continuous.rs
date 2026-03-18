@@ -80,7 +80,7 @@ fn continuous_ppo_learns_pendulum() {
         (0..n_envs)
             .map(|i| {
                 let env = Pendulum::new(rand::rngs::SmallRng::seed_from_u64(1 + i as u64));
-                let env = NormalizeObservation::new(env, 10.0);
+                let env = NormalizeObservation::new(env, 10.0).expect("Box obs space");
                 NormalizeReward::new(env, 0.99, 10.0)
             })
             .collect();

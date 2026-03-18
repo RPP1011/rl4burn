@@ -6,4 +6,5 @@
 //!   plus feature-gated `TensorBoardLogger`, `JsonLogger`, and `write_gif`
 
 pub mod env;
+pub mod error;
 pub mod log;

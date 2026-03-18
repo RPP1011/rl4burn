@@ -58,42 +58,35 @@ pub trait QNetwork<B: Backend> {
 // ---------------------------------------------------------------------------
 
 /// DQN hyperparameters.
-#[derive(Debug, Clone)]
+#[derive(Debug, burn::config::Config)]
 pub struct DqnConfig {
     /// Learning rate.
+    #[config(default = 1e-4)]
     pub lr: f64,
     /// Discount factor γ.
+    #[config(default = 0.99)]
     pub gamma: f32,
     /// Replay buffer capacity.
+    #[config(default = 10_000)]
     pub buffer_capacity: usize,
     /// Minibatch size for each gradient step.
+    #[config(default = 32)]
     pub batch_size: usize,
     /// Polyak averaging coefficient τ for target network updates.
+    #[config(default = 0.005)]
     pub tau: f32,
     /// Initial exploration rate.
+    #[config(default = 1.0)]
     pub eps_start: f32,
     /// Final exploration rate.
+    #[config(default = 0.05)]
     pub eps_end: f32,
     /// Number of steps to linearly anneal ε from start to end.
+    #[config(default = 10_000)]
     pub eps_decay_steps: usize,
     /// Number of random steps before training starts.
+    #[config(default = 1_000)]
     pub learning_starts: usize,
-}
-
-impl Default for DqnConfig {
-    fn default() -> Self {
-        Self {
-            lr: 1e-4,
-            gamma: 0.99,
-            buffer_capacity: 10_000,
-            batch_size: 32,
-            tau: 0.005,
-            eps_start: 1.0,
-            eps_end: 0.05,
-            eps_decay_steps: 10_000,
-            learning_starts: 1_000,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

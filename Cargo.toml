@@ -6,6 +6,9 @@ members = [
     "crates/rl4burn-algo",
     "crates/rl4burn-envs",
     "rl4burn",
+    "examples/quickstart",
+    "examples/config-driven",
+    "examples/custom-env",
 ]
 resolver = "2"
 
@@ -22,3 +25,4 @@ rand = "0.10"
 rand_distr = "0.6"
 crc32c = { version = "0.6" }
 gif = { version = "0.13" }
+thiserror = "2"

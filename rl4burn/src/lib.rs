@@ -31,6 +31,9 @@ pub mod log {
 // Convenience re-exports
 // ---------------------------------------------------------------------------
 
+// Error types
+pub use rl4burn_core::error::{Rl4BurnError, Result as Rl4BurnResult};
+
 // Environment
 pub use rl4burn_core::env::adapter::DiscreteEnvAdapter;
 pub use rl4burn_core::env::space::Space;

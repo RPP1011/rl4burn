@@ -39,7 +39,7 @@ Normalizes observations to zero mean, unit variance using Welford's online algor
 ```rust,ignore
 use rl4burn::wrapper::NormalizeObservation;
 
-let env = NormalizeObservation::new(my_env, 10.0); // clip normalized obs to [-10, 10]
+let env = NormalizeObservation::new(my_env, 10.0).unwrap(); // clip normalized obs to [-10, 10]
 ```
 
 Requires the environment to have `Observation = Vec<f32>` and a `Box` observation space.
@@ -51,7 +51,7 @@ Wrappers compose naturally:
 ```rust,ignore
 let env = EpisodeStats::new(
     RewardClip::new(
-        NormalizeObservation::new(my_env, 10.0),
+        NormalizeObservation::new(my_env, 10.0).unwrap(),
         1.0
     )
 );
