@@ -5,7 +5,7 @@ Train agents by playing against past versions of themselves. The core mechanism 
 ## API
 
 ```rust,ignore
-use rl4burn::algo::self_play::{SelfPlayPool, branch_agent};
+use rl4burn::algo::multi_agent::self_play::{SelfPlayPool, branch_agent};
 
 let mut pool = SelfPlayPool::new();
 

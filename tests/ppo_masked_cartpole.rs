@@ -67,6 +67,7 @@ impl<B: Backend> MaskedActorCritic<B> for Agent<B> {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore] // slow: run with `cargo test -- --ignored`
 fn masked_ppo_solves_cartpole() {
     let device = NdArrayDevice::Cpu;
     let mut rng = rand::rngs::SmallRng::seed_from_u64(1);

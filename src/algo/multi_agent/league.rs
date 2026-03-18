@@ -4,8 +4,8 @@
 //! main agents, main exploiters, and league exploiters. Each role has
 //! different matchmaking strategies and checkpoint/reset behavior.
 
-use crate::algo::pfsp::{PfspConfig, PfspMatchmaking};
-use crate::algo::self_play::SelfPlayPool;
+use super::pfsp::{PfspConfig, PfspMatchmaking};
+use super::self_play::SelfPlayPool;
 use rand::{Rng, RngExt};
 
 // ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@ Generate trajectories entirely within the RSSM latent space for actor-critic tra
 ## API
 
 ```rust,ignore
-use rl4burn::algo::imagination::{imagine_rollout, lambda_returns};
+use rl4burn::algo::planning::imagination::{imagine_rollout, lambda_returns};
 
 let trajectory = imagine_rollout(
     &rssm,

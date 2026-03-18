@@ -89,7 +89,7 @@ See [KL Balancing with Free Bits](../nn/kl-balance.md).
 Once the world model is trained, generate trajectories purely in latent space:
 
 ```rust,ignore
-use rl4burn::algo::imagination::{imagine_rollout, lambda_returns};
+use rl4burn::algo::planning::imagination::{imagine_rollout, lambda_returns};
 
 let trajectory = imagine_rollout(&rssm, initial_states, |h, z| actor(h, z), 15);
 // trajectory.states: 16 states (initial + 15 steps)

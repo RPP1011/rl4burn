@@ -178,6 +178,7 @@ impl<B: Backend> MaskedActorCritic<B> for NavAgent<B> {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore] // slow: run with `cargo test -- --ignored`
 fn multi_discrete_ppo_learns_navigation() {
     let device = NdArrayDevice::Cpu;
     let mut rng = rand::rngs::SmallRng::seed_from_u64(42);

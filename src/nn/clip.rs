@@ -31,11 +31,8 @@ pub fn clip_grad_norm<B: AutodiffBackend, M: AutodiffModule<B>>(
     let global_norm = collector.global_norm_sq.sqrt();
     let clip_coef = (max_norm / (global_norm + 1e-6)).min(1.0);
 
-    if clip_coef >= 1.0 {
-        return collector.grads;
-    }
-
-    // Phase 2: Re-register scaled gradients with correct dimensions.
+    // Phase 2: Re-register gradients (scaled if clipping is needed).
+    // We must always re-register because Phase 1 removed them from grads.
     let mut scaler = GradScaler {
         grads: collector.grads,
         clip_coef,

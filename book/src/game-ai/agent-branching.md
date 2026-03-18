@@ -5,7 +5,7 @@ Clone an agent's weights to create a new specialized agent. Used by SCC for init
 ## API
 
 ```rust,ignore
-use rl4burn::algo::self_play::branch_agent;
+use rl4burn::algo::multi_agent::self_play::branch_agent;
 
 let exploiter = branch_agent(&main_agent);
 let mut exploiter_optim = AdamConfig::new().init();  // fresh optimizer!

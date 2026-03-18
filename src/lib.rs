@@ -24,6 +24,9 @@ pub mod algo;
 /// Neural network utilities for RL.
 pub mod nn;
 
+/// Loss functions for RL training.
+pub mod loss;
+
 /// Data collection and advantage estimation.
 pub mod collect;
 
@@ -42,25 +45,32 @@ pub use env::wrapper;
 pub use env::{Env, Step};
 
 // Algorithms
-pub use algo::dqn::{dqn_update, epsilon_greedy, epsilon_schedule, DqnConfig, DqnStats, QNetwork, Transition};
-pub use algo::ppo::{ppo_collect, ppo_update, PpoConfig, PpoRollout, PpoStats};
-pub use algo::ppo_masked::{
+pub use algo::base::dqn::{dqn_update, epsilon_greedy, epsilon_schedule, DqnConfig, DqnStats, QNetwork, Transition};
+pub use algo::base::ppo::{ppo_collect, ppo_update, PpoConfig, PpoRollout, PpoStats};
+pub use algo::base::ppo_masked::{
     masked_ppo_collect, masked_ppo_update, MaskedActorCritic, MaskedPpoRollout,
 };
-pub use algo::behavioral_cloning::{bc_loss_discrete, bc_loss_multi_head, bc_step};
-pub use algo::distillation::{distillation_loss, value_distillation_loss, DistillationConfig};
-pub use algo::cspl::{CsplConfig, CsplPhase, CsplPipeline};
-pub use algo::league::{AgentRole, League, LeagueAgentConfig};
-pub use algo::multi_agent::{batch_multi_agent_obs, broadcast_team_reward, unbatch_actions, MultiAgentRolloutData};
-pub use algo::pfsp::{PfspConfig, PfspMatchmaking, PlayerRecord};
-pub use algo::privileged_critic::{make_critic_input, PrivilegedActorCritic};
-pub use algo::self_play::{branch_agent, SelfPlayPool};
-pub use algo::z_conditioning::{z_reward, ZConditioning, ZConditioningConfig};
-pub use algo::imagination::{imagine_rollout, lambda_returns, ImaginedTrajectory};
-pub use algo::mcts::{MctsConfig, MctsTree};
+pub use algo::base::ac::{ac_vtrace_update, AcStats};
+pub use algo::imitation::behavioral_cloning::{bc_loss_discrete, bc_loss_multi_head, bc_step};
+pub use algo::imitation::distillation::{distillation_loss, value_distillation_loss, DistillationConfig};
+pub use algo::multi_agent::league::{AgentRole, League, LeagueAgentConfig};
+pub use algo::multi_agent::utils::{batch_multi_agent_obs, broadcast_team_reward, unbatch_actions, MultiAgentRolloutData};
+pub use algo::multi_agent::pfsp::{PfspConfig, PfspMatchmaking, PlayerRecord};
+pub use algo::multi_agent::self_play::{branch_agent, SelfPlayPool};
+pub use algo::planning::imagination::{imagine_rollout, lambda_returns, ImaginedTrajectory};
+pub use algo::planning::mcts::{MctsConfig, MctsTree};
+pub use collect::cspl::{CsplConfig, CsplPhase, CsplPipeline};
 pub use algo::distributed::{
     DistributedConfig, GradientSync, LocalSync, ReduceStrategy, scale_gradients,
 };
+pub use algo::privileged_critic::{make_critic_input, PrivilegedActorCritic};
+pub use algo::z_conditioning::{z_reward, ZConditioning, ZConditioningConfig};
+pub use collect::actor_learner::{actor_learner_collect, batched_inference};
+pub use collect::centralized_inference::{
+    inference_channel, serve_inference_batch, InferenceHandle, InferenceReceiver,
+    InferenceRequest, InferenceResponse,
+};
+pub use collect::trajectory::{trajectory_queue, Trajectory, TrajectoryConsumer, TrajectoryProducer};
 
 // Action distributions
 pub use nn::autoregressive::{ActionHead, CompositeDistribution};
@@ -75,11 +85,11 @@ pub use nn::attention::{
 pub use nn::clip::clip_grad_norm;
 pub use nn::film::{Film, FilmConfig};
 pub use nn::init::orthogonal_linear;
-pub use nn::kl_balance::{
+pub use loss::kl_balance::{
     categorical_kl, categorical_kl_groups, kl_balanced_loss, kl_balanced_loss_groups,
     KlBalanceConfig,
 };
-pub use nn::loss::{policy_loss_continuous, policy_loss_discrete, value_loss};
+pub use loss::policy::{policy_loss_continuous, policy_loss_discrete, value_loss};
 pub use nn::rnn::{
     BlockGruCell, BlockGruCellConfig, GruCell, GruCellConfig, LstmCell, LstmCellConfig, LstmState,
 };
@@ -90,7 +100,7 @@ pub use nn::vae::{BetaVae, BetaVaeConfig, VaeOutput};
 
 // Rendering
 pub use env::render::{Renderable, RgbFrame};
-pub use nn::multi_head_value::{multi_head_gae, multi_head_value_loss, MultiHeadGaeResult, MultiHeadValueConfig};
+pub use loss::multi_head_value::{multi_head_gae, multi_head_value_loss, MultiHeadGaeResult, MultiHeadValueConfig};
 pub use nn::polyak::polyak_update;
 
 // Data collection

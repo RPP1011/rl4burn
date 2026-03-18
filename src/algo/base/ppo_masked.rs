@@ -7,7 +7,7 @@
 //! For simple discrete without masking, the original `ppo_collect`/`ppo_update`
 //! from `algo::ppo` are more ergonomic.
 
-use crate::algo::ppo::{PpoConfig, PpoStats};
+use crate::algo::base::ppo::{PpoConfig, PpoStats};
 use crate::collect::gae;
 use crate::env::vec_env::SyncVecEnv;
 use crate::env::Env;

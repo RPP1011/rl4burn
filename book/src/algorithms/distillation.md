@@ -5,7 +5,7 @@ Train a student network to match a teacher's behavior. Used in CSPL (Phase 2) to
 ## API
 
 ```rust,ignore
-use rl4burn::algo::distillation::{distillation_loss, DistillationConfig};
+use rl4burn::algo::imitation::distillation::{distillation_loss, DistillationConfig};
 
 let config = DistillationConfig {
     temperature: 2.0,
@@ -31,6 +31,6 @@ Hinton et al. recommend scaling the soft-target loss by T-squared. Without this,
 ## Value distillation
 
 ```rust,ignore
-use rl4burn::algo::distillation::value_distillation_loss;
+use rl4burn::algo::imitation::distillation::value_distillation_loss;
 let vloss = value_distillation_loss(teacher_values, student_values);
 ```

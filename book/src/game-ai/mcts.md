@@ -5,7 +5,7 @@ UCT-based Monte Carlo Tree Search for pre-game decisions like unit composition o
 ## API
 
 ```rust,ignore
-use rl4burn::algo::mcts::{MctsTree, MctsConfig};
+use rl4burn::algo::planning::mcts::{MctsTree, MctsConfig};
 
 let mut tree = MctsTree::new(MctsConfig {
     n_simulations: 800,

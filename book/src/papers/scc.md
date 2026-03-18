@@ -46,7 +46,7 @@ See [FiLM Conditioning](../nn/film.md).
 When creating a new exploiter, SCC clones the *current main agent's weights* instead of starting from the supervised model. The optimizer state is reset. This gives exploiters a head start.
 
 ```rust,ignore
-use rl4burn::algo::self_play::branch_agent;
+use rl4burn::algo::multi_agent::self_play::branch_agent;
 let exploiter = branch_agent(&main_agent);
 // Create a fresh optimizer for the exploiter
 ```

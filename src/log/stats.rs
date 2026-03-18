@@ -1,8 +1,8 @@
 //! [`Loggable`] trait and implementations for algorithm stats structs.
 
 use super::Logger;
-use crate::algo::dqn::DqnStats;
-use crate::algo::ppo::PpoStats;
+use crate::algo::base::dqn::DqnStats;
+use crate::algo::base::ppo::PpoStats;
 
 /// Types that can log their fields to a [`Logger`].
 pub trait Loggable {

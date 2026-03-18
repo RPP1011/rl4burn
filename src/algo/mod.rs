@@ -1,15 +1,8 @@
-pub mod behavioral_cloning;
-pub mod cspl;
-pub mod distillation;
-pub mod distributed;
-pub mod dqn;
-pub mod imagination;
-pub mod league;
-pub mod mcts;
+pub mod base;
+pub mod imitation;
 pub mod multi_agent;
-pub mod pfsp;
-pub mod ppo;
-pub mod ppo_masked;
+pub mod planning;
+
+pub mod distributed;
 pub mod privileged_critic;
-pub mod self_play;
 pub mod z_conditioning;

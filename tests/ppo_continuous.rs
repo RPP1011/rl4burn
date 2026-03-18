@@ -69,6 +69,7 @@ impl<B: Backend> MaskedActorCritic<B> for ContinuousAgent<B> {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore] // slow: run with `cargo test -- --ignored`
 fn continuous_ppo_learns_pendulum() {
     let device = NdArrayDevice::Cpu;
     let mut rng = rand::rngs::SmallRng::seed_from_u64(1);

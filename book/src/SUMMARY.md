@@ -22,6 +22,12 @@
 - [Behavioral Cloning](./algorithms/behavioral-cloning.md)
 - [Policy Distillation](./algorithms/distillation.md)
 
+# Loss Functions
+
+- [Policy & Value Losses](./building-blocks/losses.md)
+- [Multi-Head Value Decomposition](./building-blocks/multi-head-value.md)
+- [KL Balancing with Free Bits](./nn/kl-balance.md)
+
 # Building Blocks
 
 - [GAE (Generalized Advantage Estimation)](./building-blocks/gae.md)
@@ -30,10 +36,9 @@
 - [Replay Buffer](./building-blocks/replay-buffer.md)
 - [Sequence Replay Buffer](./building-blocks/sequence-replay.md)
 - [Percentile Return Normalization](./building-blocks/percentile-normalize.md)
-- [Multi-Head Value Decomposition](./building-blocks/multi-head-value.md)
 - [Intrinsic Rewards](./building-blocks/intrinsic-rewards.md)
+- [CSPL (Curriculum Self-Play Learning)](./game-ai/cspl.md)
 - [Polyak Updates](./building-blocks/polyak.md)
-- [Loss Functions](./building-blocks/losses.md)
 - [Orthogonal Initialization](./building-blocks/init.md)
 - [Global Gradient Clipping](./building-blocks/grad-clip.md)
 - [Logging](./building-blocks/logging.md)
@@ -47,7 +52,6 @@
 - [Auto-Regressive Action Distributions](./nn/autoregressive.md)
 - [FiLM Conditioning](./nn/film.md)
 - [Symlog and Twohot Encoding](./nn/symlog.md)
-- [KL Balancing with Free Bits](./nn/kl-balance.md)
 
 # World Models (DreamerV3)
 
@@ -66,7 +70,6 @@
 - [Agent Branching](./game-ai/agent-branching.md)
 - [MCTS for Drafting](./game-ai/mcts.md)
 - [Beta-VAE Opponent Modeling](./game-ai/beta-vae.md)
-- [CSPL (Curriculum Self-Play Learning)](./game-ai/cspl.md)
 - [Distributed Training](./game-ai/distributed.md)
 
 # Paper Guides (ELI5)
