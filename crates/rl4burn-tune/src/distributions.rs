@@ -172,12 +172,13 @@ pub fn transform_from_internal(internal: f64, dist: &FloatDistribution) -> f64 {
 
 /// Transform an integer value to internal [0, 1] representation.
 pub fn int_transform_to_internal(value: i64, dist: &IntDistribution) -> f64 {
-    if dist.log {
+    let v = if dist.log {
         ((value as f64).ln() - (dist.low as f64).ln())
             / ((dist.high as f64).ln() - (dist.low as f64).ln())
     } else {
         (value - dist.low) as f64 / (dist.high - dist.low) as f64
-    }
+    };
+    v.clamp(0.0, 1.0)
 }
 
 /// Transform from internal [0, 1] back to an integer value.

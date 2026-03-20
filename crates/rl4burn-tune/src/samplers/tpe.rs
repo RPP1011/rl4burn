@@ -228,6 +228,11 @@ impl ParzenEstimator {
         prior_pos: usize,
         weights_func: &[f64],
     ) -> Vec<f64> {
+        debug_assert_eq!(
+            weights_func.len(),
+            n_observations,
+            "weights_func length must match n_observations"
+        );
         let mut weights = Vec::with_capacity(n_observations + if consider_prior { 1 } else { 0 });
 
         if consider_prior {
@@ -276,14 +281,13 @@ impl ParzenEstimator {
         // Pick a component proportionally to weights
         let u: f64 = rng.random();
         let mut cumulative = 0.0;
-        let mut chosen = 0;
+        let mut chosen = self.weights.len() - 1;
         for (i, &w) in self.weights.iter().enumerate() {
             cumulative += w;
             if u < cumulative {
                 chosen = i;
                 break;
             }
-            chosen = i;
         }
 
         // Sample from the chosen Gaussian
