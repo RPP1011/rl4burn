@@ -1,6 +1,8 @@
+mod cmaes;
 mod random;
 mod tpe;
 
+pub use cmaes::{CmaEsConfig, CmaEsSampler};
 pub use random::RandomSampler;
 pub use tpe::{TpeSampler, TpeSamplerConfig};
 

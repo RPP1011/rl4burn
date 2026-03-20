@@ -48,6 +48,8 @@ pub struct Trial {
     pub number: usize,
     pub params: HashMap<String, f64>,
     pub intermediate_values: HashMap<usize, f64>,
+    /// Whether this trial has been marked as pruned.
+    pub pruned: bool,
 }
 
 impl Trial {
@@ -56,6 +58,7 @@ impl Trial {
             number,
             params: HashMap::new(),
             intermediate_values: HashMap::new(),
+            pruned: false,
         }
     }
 
@@ -129,6 +132,36 @@ impl Trial {
     /// Report an intermediate value at the given step.
     pub fn report(&mut self, step: usize, value: f64) {
         self.intermediate_values.insert(step, value);
+    }
+
+    /// Check if the trial should be pruned, using the given study and pruner.
+    ///
+    /// Creates a temporary FrozenTrial snapshot to pass to the pruner.
+    /// If the pruner says to prune, marks this trial as pruned and returns true.
+    pub fn should_prune(
+        &mut self,
+        study: &crate::study::Study,
+        pruner: Option<&dyn crate::pruners::Pruner>,
+    ) -> bool {
+        let pruner = match pruner {
+            Some(p) => p,
+            None => return false,
+        };
+
+        let frozen = FrozenTrial {
+            number: self.number,
+            state: TrialState::Running,
+            value: None,
+            params: self.params.clone(),
+            intermediate_values: self.intermediate_values.clone(),
+        };
+
+        if pruner.prune(study, &frozen) {
+            self.pruned = true;
+            true
+        } else {
+            false
+        }
     }
 }
 

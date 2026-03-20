@@ -2,7 +2,8 @@ use rand::prelude::*;
 use std::sync::Mutex;
 
 use crate::distributions::{
-    transform_from_internal, transform_to_internal, Distribution, FloatDistribution,
+    int_transform_from_internal, int_transform_to_internal, transform_from_internal,
+    transform_to_internal, Distribution, FloatDistribution, IntDistribution,
 };
 use crate::study::Study;
 use crate::trial::{Trial, TrialState};
@@ -89,6 +90,31 @@ pub fn default_weights(n: usize) -> Vec<f64> {
         weights.push(1.0);
     }
     weights
+}
+
+// --- Order and sorting ---
+
+/// Sort observed values by weight-priority, returning the permutation.
+///
+/// This implements Optuna's `_calculate_order`: values are sorted by
+/// weight (descending), with ties broken by value (ascending). The returned
+/// indices can be used to reorder both values and weights.
+pub fn calculate_order(values: &[f64], weights: &[f64]) -> Vec<usize> {
+    let mut indices: Vec<usize> = (0..values.len()).collect();
+    indices.sort_by(|&a, &b| {
+        // Primary: higher weight first
+        let w_cmp = weights[b]
+            .partial_cmp(&weights[a])
+            .unwrap_or(std::cmp::Ordering::Equal);
+        if w_cmp != std::cmp::Ordering::Equal {
+            return w_cmp;
+        }
+        // Secondary: lower value first
+        values[a]
+            .partial_cmp(&values[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    indices
 }
 
 // --- Parzen Estimator ---
@@ -265,6 +291,99 @@ impl ParzenEstimator {
     }
 }
 
+/// Categorical Parzen Estimator using the Aitchison-Aitken kernel.
+///
+/// Instead of a Gaussian mixture, this estimates the probability of each
+/// category using a smoothed histogram. The kernel parameter `alpha` controls
+/// smoothing: alpha=0 gives the empirical distribution, alpha=1 gives uniform.
+#[derive(Debug, Clone)]
+pub struct CategoricalParzenEstimator {
+    pub probabilities: Vec<f64>,
+}
+
+impl CategoricalParzenEstimator {
+    /// Build a categorical Parzen estimator from observed category indices.
+    ///
+    /// `observations`: category indices observed so far.
+    /// `n_choices`: total number of categories.
+    /// `prior_weight`: weight of the uniform prior.
+    /// `weights`: per-observation weights.
+    pub fn new(
+        observations: &[usize],
+        n_choices: usize,
+        prior_weight: f64,
+        weights: &[f64],
+    ) -> Self {
+        assert!(n_choices > 0);
+
+        // Aitchison-Aitken kernel bandwidth
+        // alpha = 1 / (n_observations + 1) heuristic, clamped
+        let n = observations.len() as f64;
+        let alpha = if n > 0.0 {
+            (1.0 / (n + 1.0)).clamp(1e-12, 1.0 - 1e-12)
+        } else {
+            1.0 / n_choices as f64
+        };
+
+        let mut counts = vec![0.0_f64; n_choices];
+
+        // Weighted counts with Aitchison-Aitken smoothing
+        for (i, &cat) in observations.iter().enumerate() {
+            let w = if i < weights.len() { weights[i] } else { 1.0 };
+            for j in 0..n_choices {
+                if j == cat {
+                    counts[j] += w * (1.0 - alpha);
+                } else {
+                    counts[j] += w * alpha / (n_choices as f64 - 1.0);
+                }
+            }
+        }
+
+        // Add uniform prior
+        let prior_per_cat = prior_weight / n_choices as f64;
+        for c in &mut counts {
+            *c += prior_per_cat;
+        }
+
+        // Normalize to probabilities
+        let total: f64 = counts.iter().sum();
+        let probabilities = if total > 0.0 {
+            counts.iter().map(|&c| c / total).collect()
+        } else {
+            vec![1.0 / n_choices as f64; n_choices]
+        };
+
+        Self { probabilities }
+    }
+
+    /// Log-probability of a given category index.
+    pub fn log_pdf(&self, index: usize) -> f64 {
+        if index >= self.probabilities.len() {
+            return f64::NEG_INFINITY;
+        }
+        let p = self.probabilities[index];
+        if p <= 0.0 {
+            f64::NEG_INFINITY
+        } else {
+            p.ln()
+        }
+    }
+
+    /// Sample a category index from this estimator.
+    #[allow(dead_code)]
+    pub fn sample(&self, rng: &mut impl Rng) -> usize {
+        let u: f64 = rng.random();
+        let mut cumulative = 0.0;
+        for (i, &p) in self.probabilities.iter().enumerate() {
+            cumulative += p;
+            if u < cumulative {
+                return i;
+            }
+        }
+        self.probabilities.len() - 1
+    }
+}
+
 /// Log-pdf of a single Gaussian component.
 fn gaussian_log_pdf(x: f64, mu: f64, sigma: f64) -> f64 {
     let z = (x - mu) / sigma;
@@ -331,29 +450,14 @@ impl TpeSampler {
         }
     }
 
-    /// Sample a float parameter using TPE.
-    fn sample_float(
+    /// Split completed trials into good/bad index groups, sorted by objective.
+    /// Returns (good_indices, bad_indices) into the `completed` slice.
+    fn split_trials(
         &self,
         study: &Study,
-        dist: &FloatDistribution,
-        param_name: &str,
-    ) -> f64 {
-        // Gather completed trials that have this parameter
-        let completed: Vec<_> = study
-            .trials()
-            .iter()
-            .filter(|t| t.state == TrialState::Complete && t.params.contains_key(param_name))
-            .collect();
-
+        completed: &[&crate::trial::FrozenTrial],
+    ) -> (Vec<usize>, Vec<usize>) {
         let n = completed.len();
-        if n < self.config.n_startup_trials {
-            // Fall back to random sampling during startup
-            return self
-                .random_sampler
-                .sample(study, &Trial::new(0), param_name, &Distribution::Float(dist.clone()));
-        }
-
-        // Sort trials by objective value
         let mut trial_indices: Vec<usize> = (0..n).collect();
         trial_indices.sort_by(|&a, &b| {
             let va = completed[a].value.unwrap_or(f64::INFINITY);
@@ -366,38 +470,61 @@ impl TpeSampler {
         });
 
         let n_good = self.gamma(n);
-        let good_indices = &trial_indices[..n_good];
-        let bad_indices = &trial_indices[n_good..];
+        let good = trial_indices[..n_good].to_vec();
+        let bad = trial_indices[n_good..].to_vec();
+        (good, bad)
+    }
+
+    /// Sample a float parameter using TPE.
+    fn sample_float(
+        &self,
+        study: &Study,
+        dist: &FloatDistribution,
+        param_name: &str,
+    ) -> f64 {
+        let completed: Vec<_> = study
+            .trials()
+            .iter()
+            .filter(|t| t.state == TrialState::Complete && t.params.contains_key(param_name))
+            .collect();
+
+        let n = completed.len();
+        if n < self.config.n_startup_trials {
+            return self.random_sampler.sample(
+                study,
+                &Trial::new(0),
+                param_name,
+                &Distribution::Float(dist.clone()),
+            );
+        }
+
+        let (good_indices, bad_indices) = self.split_trials(study, &completed);
 
         // Extract parameter values in internal [0, 1] space
         let good_values: Vec<f64> = good_indices
             .iter()
-            .map(|&i| {
-                let v = completed[i].params[param_name];
-                transform_to_internal(v, dist)
-            })
+            .map(|&i| transform_to_internal(completed[i].params[param_name], dist))
             .collect();
 
         let bad_values: Vec<f64> = bad_indices
             .iter()
-            .map(|&i| {
-                let v = completed[i].params[param_name];
-                transform_to_internal(v, dist)
-            })
+            .map(|&i| transform_to_internal(completed[i].params[param_name], dist))
             .collect();
 
-        // Sort values for Parzen estimation
-        let mut sorted_good = good_values.clone();
-        sorted_good.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        // Apply weight-priority ordering
+        let good_w = default_weights(good_values.len());
+        let good_order = calculate_order(&good_values, &good_w);
+        let sorted_good: Vec<f64> = good_order.iter().map(|&i| good_values[i]).collect();
+        let sorted_good_w: Vec<f64> = good_order.iter().map(|&i| good_w[i]).collect();
 
-        let mut sorted_bad = bad_values.clone();
-        sorted_bad.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let bad_w = default_weights(bad_values.len());
+        let bad_order = calculate_order(&bad_values, &bad_w);
+        let sorted_bad: Vec<f64> = bad_order.iter().map(|&i| bad_values[i]).collect();
+        let sorted_bad_w: Vec<f64> = bad_order.iter().map(|&i| bad_w[i]).collect();
 
         // Build Parzen estimators for l(x) and g(x)
-        let prior_mu = 0.5; // Center of [0, 1]
-        let prior_sigma = 1.0; // Full range
-        let good_weights = default_weights(sorted_good.len());
-        let bad_weights = default_weights(sorted_bad.len());
+        let prior_mu = 0.5;
+        let prior_sigma = 1.0;
 
         let l = ParzenEstimator::new(
             &sorted_good,
@@ -406,7 +533,7 @@ impl TpeSampler {
             self.config.consider_prior,
             self.config.consider_magic_clip,
             self.config.b_magic_exponent,
-            &good_weights,
+            &sorted_good_w,
         );
 
         let g = ParzenEstimator::new(
@@ -416,7 +543,7 @@ impl TpeSampler {
             self.config.consider_prior,
             self.config.consider_magic_clip,
             self.config.b_magic_exponent,
-            &bad_weights,
+            &sorted_bad_w,
         );
 
         // Draw candidates from l(x), evaluate EI = l(x)/g(x), pick best
@@ -436,8 +563,159 @@ impl TpeSampler {
             }
         }
 
-        // Transform back to user space
         transform_from_internal(best_candidate, dist)
+    }
+
+    /// Sample an integer parameter using TPE.
+    fn sample_int(
+        &self,
+        study: &Study,
+        dist: &IntDistribution,
+        param_name: &str,
+    ) -> f64 {
+        let completed: Vec<_> = study
+            .trials()
+            .iter()
+            .filter(|t| t.state == TrialState::Complete && t.params.contains_key(param_name))
+            .collect();
+
+        let n = completed.len();
+        if n < self.config.n_startup_trials {
+            return self.random_sampler.sample(
+                study,
+                &Trial::new(0),
+                param_name,
+                &Distribution::Int(dist.clone()),
+            );
+        }
+
+        let (good_indices, bad_indices) = self.split_trials(study, &completed);
+
+        // Extract parameter values in internal [0, 1] space
+        let good_values: Vec<f64> = good_indices
+            .iter()
+            .map(|&i| {
+                int_transform_to_internal(completed[i].params[param_name] as i64, dist)
+            })
+            .collect();
+
+        let bad_values: Vec<f64> = bad_indices
+            .iter()
+            .map(|&i| {
+                int_transform_to_internal(completed[i].params[param_name] as i64, dist)
+            })
+            .collect();
+
+        // Apply weight-priority ordering
+        let good_w = default_weights(good_values.len());
+        let good_order = calculate_order(&good_values, &good_w);
+        let sorted_good: Vec<f64> = good_order.iter().map(|&i| good_values[i]).collect();
+        let sorted_good_w: Vec<f64> = good_order.iter().map(|&i| good_w[i]).collect();
+
+        let bad_w = default_weights(bad_values.len());
+        let bad_order = calculate_order(&bad_values, &bad_w);
+        let sorted_bad: Vec<f64> = bad_order.iter().map(|&i| bad_values[i]).collect();
+        let sorted_bad_w: Vec<f64> = bad_order.iter().map(|&i| bad_w[i]).collect();
+
+        let prior_mu = 0.5;
+        let prior_sigma = 1.0;
+
+        let l = ParzenEstimator::new(
+            &sorted_good, prior_mu, prior_sigma,
+            self.config.consider_prior, self.config.consider_magic_clip,
+            self.config.b_magic_exponent, &sorted_good_w,
+        );
+
+        let g = ParzenEstimator::new(
+            &sorted_bad, prior_mu, prior_sigma,
+            self.config.consider_prior, self.config.consider_magic_clip,
+            self.config.b_magic_exponent, &sorted_bad_w,
+        );
+
+        let mut rng = self.rng.lock().unwrap();
+        let mut best_candidate = 0.5;
+        let mut best_ei = f64::NEG_INFINITY;
+
+        for _ in 0..self.config.n_ei_candidates {
+            let candidate = l.sample(&mut *rng).clamp(0.0, 1.0);
+            let l_log = l.log_pdf(candidate);
+            let g_log = g.log_pdf(candidate);
+            let ei = l_log - g_log;
+
+            if ei > best_ei {
+                best_ei = ei;
+                best_candidate = candidate;
+            }
+        }
+
+        int_transform_from_internal(best_candidate, dist) as f64
+    }
+
+    /// Sample a categorical parameter using TPE with Aitchison-Aitken kernels.
+    fn sample_categorical(
+        &self,
+        study: &Study,
+        n_choices: usize,
+        param_name: &str,
+    ) -> f64 {
+        let completed: Vec<_> = study
+            .trials()
+            .iter()
+            .filter(|t| t.state == TrialState::Complete && t.params.contains_key(param_name))
+            .collect();
+
+        let n = completed.len();
+        if n < self.config.n_startup_trials {
+            return self.random_sampler.sample(
+                study,
+                &Trial::new(0),
+                param_name,
+                &Distribution::Categorical(crate::distributions::CategoricalDistribution::new(
+                    (0..n_choices).map(|i| i.to_string()).collect(),
+                )),
+            );
+        }
+
+        let (good_indices, bad_indices) = self.split_trials(study, &completed);
+
+        let good_cats: Vec<usize> = good_indices
+            .iter()
+            .map(|&i| completed[i].params[param_name] as usize)
+            .collect();
+
+        let bad_cats: Vec<usize> = bad_indices
+            .iter()
+            .map(|&i| completed[i].params[param_name] as usize)
+            .collect();
+
+        let good_w = default_weights(good_cats.len());
+        let bad_w = default_weights(bad_cats.len());
+
+        let prior_weight = if self.config.consider_prior {
+            self.config.prior_weight
+        } else {
+            0.0
+        };
+
+        let l = CategoricalParzenEstimator::new(&good_cats, n_choices, prior_weight, &good_w);
+        let g = CategoricalParzenEstimator::new(&bad_cats, n_choices, prior_weight, &bad_w);
+
+        // Evaluate EI for each category and pick the best
+        let mut best_cat = 0;
+        let mut best_ei = f64::NEG_INFINITY;
+
+        for cat in 0..n_choices {
+            let l_log = l.log_pdf(cat);
+            let g_log = g.log_pdf(cat);
+            let ei = l_log - g_log;
+
+            if ei > best_ei {
+                best_ei = ei;
+                best_cat = cat;
+            }
+        }
+
+        best_cat as f64
     }
 }
 
@@ -445,16 +723,16 @@ impl Sampler for TpeSampler {
     fn sample(
         &self,
         study: &Study,
-        trial: &Trial,
+        _trial: &Trial,
         param_name: &str,
         distribution: &Distribution,
     ) -> f64 {
         match distribution {
             Distribution::Float(d) => self.sample_float(study, d, param_name),
-            // For int and categorical, fall back to random during early implementation
-            _ => self
-                .random_sampler
-                .sample(study, trial, param_name, distribution),
+            Distribution::Int(d) => self.sample_int(study, d, param_name),
+            Distribution::Categorical(d) => {
+                self.sample_categorical(study, d.choices.len(), param_name)
+            }
         }
     }
 }
@@ -575,6 +853,54 @@ mod tests {
     }
 
     #[test]
+    fn test_calculate_order() {
+        let values = vec![0.5, 0.1, 0.9, 0.3];
+        let weights = vec![1.0, 1.0, 1.0, 1.0];
+        let order = calculate_order(&values, &weights);
+        // Equal weights, so sort by value ascending
+        let sorted: Vec<f64> = order.iter().map(|&i| values[i]).collect();
+        assert_eq!(sorted, vec![0.1, 0.3, 0.5, 0.9]);
+    }
+
+    #[test]
+    fn test_calculate_order_weighted() {
+        let values = vec![0.5, 0.1, 0.9];
+        let weights = vec![1.0, 3.0, 2.0];
+        let order = calculate_order(&values, &weights);
+        // Highest weight first: index 1 (w=3), then 2 (w=2), then 0 (w=1)
+        assert_eq!(order, vec![1, 2, 0]);
+    }
+
+    #[test]
+    fn test_categorical_parzen_estimator() {
+        let obs = vec![0, 0, 0, 1, 2];
+        let weights = vec![1.0; 5];
+        let pe = CategoricalParzenEstimator::new(&obs, 3, 1.0, &weights);
+        assert_eq!(pe.probabilities.len(), 3);
+        // Category 0 observed most, should have highest probability
+        assert!(pe.probabilities[0] > pe.probabilities[1]);
+        assert!(pe.probabilities[0] > pe.probabilities[2]);
+        // All positive
+        for &p in &pe.probabilities {
+            assert!(p > 0.0);
+        }
+        // Sum to 1
+        let total: f64 = pe.probabilities.iter().sum();
+        assert!((total - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_categorical_parzen_sample() {
+        let obs = vec![0, 0, 0, 1, 2];
+        let pe = CategoricalParzenEstimator::new(&obs, 3, 1.0, &[1.0; 5]);
+        let mut rng = StdRng::seed_from_u64(42);
+        for _ in 0..100 {
+            let s = pe.sample(&mut rng);
+            assert!(s < 3);
+        }
+    }
+
+    #[test]
     fn test_tpe_sampler_suggests_in_bounds() {
         let sampler = TpeSampler::with_seed(42);
         let dist = FloatDistribution::new(0.0, 10.0, false, None);
@@ -599,5 +925,60 @@ mod tests {
             v >= 0.0 && v <= 10.0,
             "TPE suggested value {v} outside [0, 10]"
         );
+    }
+
+    #[test]
+    fn test_tpe_sampler_int_in_bounds() {
+        let sampler = TpeSampler::with_seed(42);
+        let dist = crate::distributions::IntDistribution::new(1, 100, false, None);
+        let mut study = Study::new_default();
+
+        for i in 0..20 {
+            let value = (i * 5 + 1) as f64;
+            let mut params = std::collections::HashMap::new();
+            params.insert("n".to_string(), value);
+            study.add_completed_trial(params, value);
+        }
+
+        let trial = Trial::new(20);
+        let v = sampler.sample(
+            &study,
+            &trial,
+            "n",
+            &Distribution::Int(dist),
+        ) as i64;
+        assert!(
+            v >= 1 && v <= 100,
+            "TPE suggested int {v} outside [1, 100]"
+        );
+    }
+
+    #[test]
+    fn test_tpe_sampler_categorical() {
+        let sampler = TpeSampler::with_seed(42);
+        let dist = crate::distributions::CategoricalDistribution::new(vec![
+            "a".into(), "b".into(), "c".into(), "d".into(),
+        ]);
+        let mut study = Study::new_default();
+
+        // Add trials where category 0 ("a") tends to have the best objective
+        for i in 0..20 {
+            let cat = (i % 4) as f64;
+            let value = if cat == 0.0 { 0.1 } else { 5.0 + cat };
+            let mut params = std::collections::HashMap::new();
+            params.insert("opt".to_string(), cat);
+            study.add_completed_trial(params, value);
+        }
+
+        let trial = Trial::new(20);
+        let v = sampler.sample(
+            &study,
+            &trial,
+            "opt",
+            &Distribution::Categorical(dist),
+        ) as usize;
+        assert!(v < 4, "TPE suggested category {v} outside [0, 4)");
+        // With category 0 being consistently best, TPE should favor it
+        assert_eq!(v, 0, "TPE should favor category 0 which has the best objective");
     }
 }

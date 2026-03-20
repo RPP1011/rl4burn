@@ -14,6 +14,6 @@ mod proofs;
 
 pub use distributions::*;
 pub use pruners::{HyperbandPruner, MedianPruner, PercentilePruner, Pruner};
-pub use samplers::{RandomSampler, Sampler, TpeSampler, TpeSamplerConfig};
+pub use samplers::{CmaEsConfig, CmaEsSampler, RandomSampler, Sampler, TpeSampler, TpeSamplerConfig};
 pub use study::{Direction, Study, StudyConfig};
 pub use trial::{FrozenTrial, Trial, TrialState};

@@ -95,6 +95,11 @@ impl Study {
     /// Run the optimization loop.
     ///
     /// `objective` receives a mutable `Trial` and should return the objective value.
+    /// The objective can call `trial.report(step, value)` to report intermediate
+    /// values and `trial.should_prune(study, pruner)` to check if the trial
+    /// should be stopped early. If the objective returns `Err(Pruned)`, the
+    /// trial is recorded as pruned.
+    ///
     /// `sampler` is used to suggest parameter values.
     /// `pruner` is optionally used to decide early stopping.
     pub fn optimize<F>(
@@ -117,8 +122,11 @@ impl Study {
             frozen.value = Some(value);
             frozen.intermediate_values = trial.intermediate_values.clone();
 
-            // Check pruning
-            if let Some(p) = pruner {
+            // Check if the trial was pruned mid-objective
+            if trial.pruned {
+                frozen.state = TrialState::Pruned;
+            } else if let Some(p) = pruner {
+                // Post-hoc pruning check
                 if p.prune(self, &frozen) {
                     frozen.state = TrialState::Pruned;
                 } else {
@@ -126,6 +134,68 @@ impl Study {
                 }
             } else {
                 frozen.state = TrialState::Complete;
+            }
+
+            self.trials.push(frozen);
+        }
+    }
+
+    /// Run the optimization loop with a fallible objective.
+    ///
+    /// The objective returns `Ok(value)` for success or `Err(())` to signal
+    /// pruning (the trial was stopped early). This enables mid-objective pruning:
+    ///
+    /// ```ignore
+    /// study.optimize_prunable(100, &sampler, Some(&pruner), |trial, sampler, study, pruner| {
+    ///     let lr = trial.suggest_float("lr", 1e-5, 1e-1, true, None, sampler, study);
+    ///     for epoch in 0..100 {
+    ///         let loss = train_epoch(lr);
+    ///         trial.report(epoch, loss);
+    ///         if trial.should_prune(study, pruner) {
+    ///             return Err(());
+    ///         }
+    ///     }
+    ///     Ok(final_loss)
+    /// });
+    /// ```
+    pub fn optimize_prunable<F>(
+        &mut self,
+        n_trials: usize,
+        sampler: &dyn crate::samplers::Sampler,
+        pruner: Option<&dyn crate::pruners::Pruner>,
+        mut objective: F,
+    ) where
+        F: FnMut(
+            &mut crate::trial::Trial,
+            &dyn crate::samplers::Sampler,
+            &Self,
+            Option<&dyn crate::pruners::Pruner>,
+        ) -> Result<f64, ()>,
+    {
+        for _ in 0..n_trials {
+            let trial_number = self.trials.len();
+            let mut trial = crate::trial::Trial::new(trial_number);
+
+            let result = objective(&mut trial, sampler, self, pruner);
+
+            let mut frozen = FrozenTrial::new(trial_number);
+            frozen.params = trial.params.clone();
+            frozen.intermediate_values = trial.intermediate_values.clone();
+
+            match result {
+                Ok(value) => {
+                    frozen.value = Some(value);
+                    frozen.state = TrialState::Complete;
+                }
+                Err(()) => {
+                    // Use the last intermediate value if available
+                    frozen.value = trial
+                        .intermediate_values
+                        .values()
+                        .copied()
+                        .last();
+                    frozen.state = TrialState::Pruned;
+                }
             }
 
             self.trials.push(frozen);
@@ -159,6 +229,42 @@ mod tests {
         study.add_completed_trial(params.clone(), 8.0);
 
         assert_eq!(study.best_value(), Some(10.0));
+    }
+
+    #[test]
+    fn test_study_optimize_prunable() {
+        use crate::pruners::MedianPruner;
+
+        let mut study = Study::new(Direction::Minimize);
+        let sampler = crate::samplers::RandomSampler::new(42);
+        let pruner = MedianPruner::new(2, 0, 1);
+
+        study.optimize_prunable(20, &sampler, Some(&pruner), |trial, sampler, study, pruner| {
+            let dist = crate::distributions::Distribution::Float(
+                crate::distributions::FloatDistribution::new(-5.0, 5.0, false, None),
+            );
+            let x = trial.suggest("x", &dist, sampler, study);
+
+            // Simulate multi-step objective
+            for step in 0..5 {
+                let value = x * x + step as f64;
+                trial.report(step, value);
+                if trial.should_prune(study, pruner) {
+                    return Err(());
+                }
+            }
+            Ok(x * x)
+        });
+
+        assert_eq!(study.trials().len(), 20);
+        // Some trials should have been pruned
+        // At least some should complete (startup trials won't be pruned)
+        let n_completed = study
+            .trials()
+            .iter()
+            .filter(|t| t.state == TrialState::Complete)
+            .count();
+        assert!(n_completed > 0, "some trials should complete");
     }
 
     #[test]
