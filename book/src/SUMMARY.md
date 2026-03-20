@@ -79,6 +79,7 @@
 - [MCTS for Drafting](./game-ai/mcts.md)
 - [Beta-VAE Opponent Modeling](./game-ai/beta-vae.md)
 - [Distributed Training](./game-ai/distributed.md)
+- [Cloud GPU Deployment](./game-ai/cloud-deploy.md)
 
 # Paper Guides (ELI5)
 

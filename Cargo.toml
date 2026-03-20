@@ -21,6 +21,7 @@ members = [
     "examples/action-masking",
     "examples/lstm-policy",
     "examples/multi-agent",
+    "examples/deploy-cloud",
 ]
 resolver = "2"
 
