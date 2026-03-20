@@ -4862,6 +4862,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rl4burn-tune"
+version = "0.2.0"
+dependencies = [
+ "rand 0.10.0",
+ "rand_distr 0.6.0",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "rmp"
 version = "0.8.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
