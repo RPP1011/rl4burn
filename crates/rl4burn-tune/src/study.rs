@@ -119,21 +119,29 @@ impl Study {
 
             let mut frozen = FrozenTrial::new(trial_number);
             frozen.params = trial.params.clone();
-            frozen.value = Some(value);
             frozen.intermediate_values = trial.intermediate_values.clone();
 
             // Check if the trial was pruned mid-objective
             if trial.pruned {
                 frozen.state = TrialState::Pruned;
-            } else if let Some(p) = pruner {
-                // Post-hoc pruning check
-                if p.prune(self, &frozen) {
-                    frozen.state = TrialState::Pruned;
+                // Use the last reported intermediate value, not the objective return
+                frozen.value = trial
+                    .intermediate_values
+                    .iter()
+                    .max_by_key(|(&step, _)| step)
+                    .map(|(_, &v)| v);
+            } else {
+                frozen.value = Some(value);
+                if let Some(p) = pruner {
+                    // Post-hoc pruning check
+                    if p.prune(self, &frozen) {
+                        frozen.state = TrialState::Pruned;
+                    } else {
+                        frozen.state = TrialState::Complete;
+                    }
                 } else {
                     frozen.state = TrialState::Complete;
                 }
-            } else {
-                frozen.state = TrialState::Complete;
             }
 
             self.trials.push(frozen);
@@ -188,12 +196,12 @@ impl Study {
                     frozen.state = TrialState::Complete;
                 }
                 Err(()) => {
-                    // Use the last intermediate value if available
+                    // Use the value at the highest reported step
                     frozen.value = trial
                         .intermediate_values
-                        .values()
-                        .copied()
-                        .last();
+                        .iter()
+                        .max_by_key(|(&step, _)| step)
+                        .map(|(_, &v)| v);
                     frozen.state = TrialState::Pruned;
                 }
             }

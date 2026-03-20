@@ -94,22 +94,14 @@ pub fn default_weights(n: usize) -> Vec<f64> {
 
 // --- Order and sorting ---
 
-/// Sort observed values by weight-priority, returning the permutation.
+/// Sort observed values by value (ascending), returning the permutation.
 ///
-/// This implements Optuna's `_calculate_order`: values are sorted by
-/// weight (descending), with ties broken by value (ascending). The returned
-/// indices can be used to reorder both values and weights.
-pub fn calculate_order(values: &[f64], weights: &[f64]) -> Vec<usize> {
+/// This implements Optuna's `_calculate_order`: values are sorted by value
+/// so that the corresponding weights can be reordered to match. The Parzen
+/// estimator requires value-sorted inputs for correct bandwidth computation.
+pub fn calculate_order(values: &[f64]) -> Vec<usize> {
     let mut indices: Vec<usize> = (0..values.len()).collect();
     indices.sort_by(|&a, &b| {
-        // Primary: higher weight first
-        let w_cmp = weights[b]
-            .partial_cmp(&weights[a])
-            .unwrap_or(std::cmp::Ordering::Equal);
-        if w_cmp != std::cmp::Ordering::Equal {
-            return w_cmp;
-        }
-        // Secondary: lower value first
         values[a]
             .partial_cmp(&values[b])
             .unwrap_or(std::cmp::Ordering::Equal)
@@ -146,10 +138,20 @@ impl ParzenEstimator {
         b_magic_exponent: f64,
         weights_func: &[f64],
     ) -> Self {
+        // Find where the prior will be inserted so we can align weights
+        let prior_pos = if consider_prior {
+            sorted_values
+                .iter()
+                .position(|&v| v > prior_mu)
+                .unwrap_or(sorted_values.len())
+        } else {
+            0
+        };
         let mus = Self::calculate_mus(sorted_values, prior_mu, consider_prior);
         let sigmas =
             Self::calculate_sigmas(&mus, prior_sigma, consider_magic_clip, b_magic_exponent);
-        let weights = Self::calculate_weights(sorted_values.len(), consider_prior, weights_func);
+        let weights =
+            Self::calculate_weights(sorted_values.len(), consider_prior, prior_pos, weights_func);
 
         ParzenEstimator {
             mus,
@@ -216,31 +218,32 @@ impl ParzenEstimator {
         sigmas
     }
 
-    /// Compute component weights.
+    /// Compute component weights, aligned with the mus vector.
+    ///
+    /// The prior weight is inserted at `prior_pos` to match where `calculate_mus`
+    /// inserted the prior mean.
     fn calculate_weights(
         n_observations: usize,
         consider_prior: bool,
+        prior_pos: usize,
         weights_func: &[f64],
     ) -> Vec<f64> {
-        let prior_weight = if consider_prior { 1.0 } else { 0.0 };
-
         let mut weights = Vec::with_capacity(n_observations + if consider_prior { 1 } else { 0 });
 
         if consider_prior {
-            // Distribute prior weight among existing weights
             let total_obs_weight: f64 = weights_func.iter().sum();
-            let normalized_prior = if total_obs_weight > 0.0 {
-                prior_weight * (total_obs_weight / weights_func.len() as f64)
+            let normalized_prior = if n_observations > 0 && total_obs_weight > 0.0 {
+                total_obs_weight / n_observations as f64
             } else {
-                prior_weight
+                1.0
             };
 
-            // Find where the prior was inserted and place its weight there
-            // For simplicity, append prior weight and observation weights
-            // The prior is inserted in sorted order in calculate_mus,
-            // so we just need to match the ordering
-            weights.extend(weights_func.iter().copied());
+            // Insert prior weight at the same position as in calculate_mus
+            weights.extend_from_slice(&weights_func[..prior_pos.min(n_observations)]);
             weights.push(normalized_prior);
+            if prior_pos < n_observations {
+                weights.extend_from_slice(&weights_func[prior_pos..]);
+            }
         } else {
             weights.extend(weights_func.iter().copied());
         }
@@ -513,12 +516,12 @@ impl TpeSampler {
 
         // Apply weight-priority ordering
         let good_w = default_weights(good_values.len());
-        let good_order = calculate_order(&good_values, &good_w);
+        let good_order = calculate_order(&good_values);
         let sorted_good: Vec<f64> = good_order.iter().map(|&i| good_values[i]).collect();
         let sorted_good_w: Vec<f64> = good_order.iter().map(|&i| good_w[i]).collect();
 
         let bad_w = default_weights(bad_values.len());
-        let bad_order = calculate_order(&bad_values, &bad_w);
+        let bad_order = calculate_order(&bad_values);
         let sorted_bad: Vec<f64> = bad_order.iter().map(|&i| bad_values[i]).collect();
         let sorted_bad_w: Vec<f64> = bad_order.iter().map(|&i| bad_w[i]).collect();
 
@@ -608,12 +611,12 @@ impl TpeSampler {
 
         // Apply weight-priority ordering
         let good_w = default_weights(good_values.len());
-        let good_order = calculate_order(&good_values, &good_w);
+        let good_order = calculate_order(&good_values);
         let sorted_good: Vec<f64> = good_order.iter().map(|&i| good_values[i]).collect();
         let sorted_good_w: Vec<f64> = good_order.iter().map(|&i| good_w[i]).collect();
 
         let bad_w = default_weights(bad_values.len());
-        let bad_order = calculate_order(&bad_values, &bad_w);
+        let bad_order = calculate_order(&bad_values);
         let sorted_bad: Vec<f64> = bad_order.iter().map(|&i| bad_values[i]).collect();
         let sorted_bad_w: Vec<f64> = bad_order.iter().map(|&i| bad_w[i]).collect();
 
@@ -855,20 +858,22 @@ mod tests {
     #[test]
     fn test_calculate_order() {
         let values = vec![0.5, 0.1, 0.9, 0.3];
-        let weights = vec![1.0, 1.0, 1.0, 1.0];
-        let order = calculate_order(&values, &weights);
-        // Equal weights, so sort by value ascending
+        let order = calculate_order(&values);
+        // Sort by value ascending
         let sorted: Vec<f64> = order.iter().map(|&i| values[i]).collect();
         assert_eq!(sorted, vec![0.1, 0.3, 0.5, 0.9]);
     }
 
     #[test]
-    fn test_calculate_order_weighted() {
+    fn test_calculate_order_reorders_weights() {
         let values = vec![0.5, 0.1, 0.9];
         let weights = vec![1.0, 3.0, 2.0];
-        let order = calculate_order(&values, &weights);
-        // Highest weight first: index 1 (w=3), then 2 (w=2), then 0 (w=1)
-        assert_eq!(order, vec![1, 2, 0]);
+        let order = calculate_order(&values);
+        // Values sorted ascending: 0.1 (idx 1), 0.5 (idx 0), 0.9 (idx 2)
+        assert_eq!(order, vec![1, 0, 2]);
+        // Weights follow: [3.0, 1.0, 2.0]
+        let reordered_w: Vec<f64> = order.iter().map(|&i| weights[i]).collect();
+        assert_eq!(reordered_w, vec![3.0, 1.0, 2.0]);
     }
 
     #[test]

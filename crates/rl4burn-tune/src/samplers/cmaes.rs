@@ -1,7 +1,10 @@
 use rand::prelude::*;
 use std::sync::Mutex;
 
-use crate::distributions::Distribution;
+use crate::distributions::{
+    int_transform_from_internal, int_transform_to_internal, transform_from_internal,
+    transform_to_internal, Distribution,
+};
 use crate::study::Study;
 use crate::trial::{Trial, TrialState};
 
@@ -9,13 +12,13 @@ use super::Sampler;
 
 /// CMA-ES (Covariance Matrix Adaptation Evolution Strategy) sampler.
 ///
-/// This implements a simplified CMA-ES that maintains a multivariate Gaussian
-/// search distribution, adapting its mean and covariance based on the best
-/// trials. For parameters it hasn't seen enough trials for, it falls back to
-/// random sampling.
+/// This implements a simplified separable CMA-ES that maintains a per-parameter
+/// Gaussian search distribution in normalized [0,1] internal space. The mean
+/// and sigma are adapted based on the weighted mean of the best trials,
+/// with CMA-ES-style log-linear weights.
 ///
-/// This is a separable CMA-ES variant (diagonal covariance) for simplicity,
-/// which works well when parameters are roughly independent.
+/// All parameters are transformed to [0,1] internal space for scale-invariance.
+/// Categorical parameters fall back to random sampling.
 pub struct CmaEsSampler {
     config: CmaEsConfig,
     random_sampler: super::RandomSampler,
@@ -27,9 +30,7 @@ pub struct CmaEsSampler {
 pub struct CmaEsConfig {
     /// Number of startup trials before CMA-ES kicks in.
     pub n_startup_trials: usize,
-    /// Population size (lambda). If 0, uses `4 + floor(3 * ln(n_params))`.
-    pub population_size: usize,
-    /// Initial step size (sigma0).
+    /// Initial step size (sigma0) in [0,1] space. Default 0.3.
     pub sigma0: f64,
 }
 
@@ -37,28 +38,28 @@ impl Default for CmaEsConfig {
     fn default() -> Self {
         Self {
             n_startup_trials: 10,
-            population_size: 0,
-            sigma0: 0.5,
+            sigma0: 0.3,
         }
     }
 }
 
-/// Internal state of CMA-ES, updated after each generation.
+/// Internal state of CMA-ES per parameter.
+#[derive(Debug, Clone)]
+struct ParamState {
+    /// Mean of the search distribution in [0,1] internal space.
+    mean: f64,
+    /// Standard deviation in [0,1] internal space.
+    sigma: f64,
+    /// Number of times this parameter's state has been updated.
+    n_updates: usize,
+}
+
+/// Internal state of CMA-ES.
 #[derive(Debug)]
 struct CmaEsState {
     rng: StdRng,
-    /// Mean of the search distribution (one entry per parameter, in [0,1] space).
-    mean: Vec<f64>,
-    /// Standard deviations (diagonal of the covariance, in [0,1] space).
-    sigma: Vec<f64>,
-    /// Overall step size.
-    step_size: f64,
-    /// Parameter names in canonical order.
-    param_names: Vec<String>,
-    /// Number of generations completed.
-    generation: usize,
-    /// Whether the state has been initialized with parameter names.
-    initialized: bool,
+    /// Per-parameter state, keyed by parameter name.
+    params: std::collections::HashMap<String, ParamState>,
 }
 
 impl CmaEsSampler {
@@ -68,12 +69,7 @@ impl CmaEsSampler {
             random_sampler: super::RandomSampler::new(seed),
             state: Mutex::new(CmaEsState {
                 rng: StdRng::seed_from_u64(seed.wrapping_add(2)),
-                mean: Vec::new(),
-                sigma: Vec::new(),
-                step_size: config.sigma0,
-                param_names: Vec::new(),
-                generation: 0,
-                initialized: false,
+                params: std::collections::HashMap::new(),
             }),
         }
     }
@@ -82,50 +78,70 @@ impl CmaEsSampler {
         Self::new(CmaEsConfig::default(), seed)
     }
 
-    /// Get the effective population size.
-    #[allow(dead_code)]
-    fn lambda(&self, n_params: usize) -> usize {
-        if self.config.population_size > 0 {
-            self.config.population_size
-        } else {
-            4 + (3.0 * (n_params as f64).ln()).floor() as usize
+    /// Transform a raw parameter value to [0,1] internal space based on distribution.
+    fn to_internal(value: f64, distribution: &Distribution) -> f64 {
+        match distribution {
+            Distribution::Float(d) => transform_to_internal(value, d),
+            Distribution::Int(d) => int_transform_to_internal(value as i64, d),
+            Distribution::Categorical(_) => value, // not used
         }
     }
 
-    /// Update the CMA-ES state based on completed trials.
-    fn update_state(&self, study: &Study, param_name: &str) {
-        let mut state = self.state.lock().unwrap();
+    /// Transform from [0,1] internal space back to raw parameter value.
+    fn from_internal(internal: f64, distribution: &Distribution) -> f64 {
+        match distribution {
+            Distribution::Float(d) => transform_from_internal(internal, d),
+            Distribution::Int(d) => int_transform_from_internal(internal, d) as f64,
+            Distribution::Categorical(_) => internal, // not used
+        }
+    }
+}
 
-        // Initialize parameter tracking on first call
-        if !state.initialized || !state.param_names.contains(&param_name.to_string()) {
-            if !state.param_names.contains(&param_name.to_string()) {
-                state.param_names.push(param_name.to_string());
-                state.mean.push(0.5); // Start at center of [0,1]
-                state.sigma.push(self.config.sigma0);
-            }
-            state.initialized = true;
+impl Sampler for CmaEsSampler {
+    fn sample(
+        &self,
+        study: &Study,
+        trial: &Trial,
+        param_name: &str,
+        distribution: &Distribution,
+    ) -> f64 {
+        // Categorical: fall back to random
+        if matches!(distribution, Distribution::Categorical(_)) {
+            return self
+                .random_sampler
+                .sample(study, trial, param_name, distribution);
         }
 
-        // Find the parameter index
-        let param_idx = state
-            .param_names
-            .iter()
-            .position(|n| n == param_name)
-            .unwrap();
-
-        // Gather completed trials with this parameter
-        let mut completed: Vec<_> = study
+        let completed: Vec<_> = study
             .trials()
             .iter()
             .filter(|t| t.state == TrialState::Complete && t.params.contains_key(param_name))
             .collect();
 
-        if completed.len() < 2 {
-            return;
+        if completed.len() < self.config.n_startup_trials {
+            return self
+                .random_sampler
+                .sample(study, trial, param_name, distribution);
         }
 
-        // Sort by objective
-        completed.sort_by(|a, b| {
+        // Single lock scope: update state and sample in one go
+        let mut state = self.state.lock().unwrap();
+
+        // Initialize parameter if not seen before
+        if !state.params.contains_key(param_name) {
+            state.params.insert(
+                param_name.to_string(),
+                ParamState {
+                    mean: 0.5,
+                    sigma: self.config.sigma0,
+                    n_updates: 0,
+                },
+            );
+        }
+
+        // Sort completed trials by objective (best first)
+        let mut sorted_trials = completed.clone();
+        sorted_trials.sort_by(|a, b| {
             let va = a.value.unwrap_or(f64::INFINITY);
             let vb = b.value.unwrap_or(f64::INFINITY);
             match study.direction() {
@@ -138,117 +154,60 @@ impl CmaEsSampler {
             }
         });
 
-        // Use the best mu_eff trials to update the mean
-        let n = completed.len();
+        // Use the best mu_eff trials
+        let n = sorted_trials.len();
         let mu_eff = (n as f64 / 2.0).ceil() as usize;
-        let selected = &completed[..mu_eff.min(n)];
+        let selected = &sorted_trials[..mu_eff.min(n)];
 
-        // Compute weights for selected trials (log-linear, as in CMA-ES)
+        // CMA-ES log-linear weights
         let weights: Vec<f64> = (0..selected.len())
             .map(|i| ((mu_eff as f64 + 0.5).ln() - (i as f64 + 1.0).ln()).max(0.0))
             .collect();
         let w_sum: f64 = weights.iter().sum();
 
-        if w_sum <= 0.0 {
-            return;
+        if w_sum > 0.0 {
+            // Weighted mean in [0,1] internal space
+            let new_mean: f64 = selected
+                .iter()
+                .zip(weights.iter())
+                .map(|(t, &w)| {
+                    let internal = Self::to_internal(t.params[param_name], distribution);
+                    w * internal
+                })
+                .sum::<f64>()
+                / w_sum;
+
+            // Weighted variance in [0,1] internal space
+            let variance: f64 = selected
+                .iter()
+                .zip(weights.iter())
+                .map(|(t, &w)| {
+                    let internal = Self::to_internal(t.params[param_name], distribution);
+                    let diff = internal - new_mean;
+                    w * diff * diff
+                })
+                .sum::<f64>()
+                / w_sum;
+
+            let new_sigma = variance.sqrt().max(1e-6);
+
+            let ps = state.params.get_mut(param_name).unwrap();
+            // Exponential moving average to blend with prior state
+            let alpha = 0.5_f64;
+            ps.mean = alpha * new_mean + (1.0 - alpha) * ps.mean;
+            ps.sigma = alpha * new_sigma + (1.0 - alpha) * ps.sigma;
+            ps.n_updates += 1;
         }
 
-        // Weighted mean of the best parameter values (in raw space, then track)
-        let new_mean: f64 = selected
-            .iter()
-            .zip(weights.iter())
-            .map(|(t, &w)| {
-                let raw = t.params[param_name];
-                // We track means in [0,1] approximately
-                w * raw
-            })
-            .sum::<f64>()
-            / w_sum;
+        let ps = &state.params[param_name];
+        let mean = ps.mean;
+        let sigma = ps.sigma;
 
-        // Update sigma based on spread of selected trials
-        let variance: f64 = selected
-            .iter()
-            .zip(weights.iter())
-            .map(|(t, &w)| {
-                let raw = t.params[param_name];
-                let diff = raw - new_mean;
-                w * diff * diff
-            })
-            .sum::<f64>()
-            / w_sum;
-
-        let new_sigma = variance.sqrt().max(1e-12);
-
-        state.mean[param_idx] = new_mean;
-        state.sigma[param_idx] = new_sigma;
-        state.generation += 1;
-    }
-}
-
-impl Sampler for CmaEsSampler {
-    fn sample(
-        &self,
-        study: &Study,
-        trial: &Trial,
-        param_name: &str,
-        distribution: &Distribution,
-    ) -> f64 {
-        let completed_count = study
-            .trials()
-            .iter()
-            .filter(|t| t.state == TrialState::Complete && t.params.contains_key(param_name))
-            .count();
-
-        if completed_count < self.config.n_startup_trials {
-            return self
-                .random_sampler
-                .sample(study, trial, param_name, distribution);
-        }
-
-        // Update the CMA-ES state
-        self.update_state(study, param_name);
-
-        let mut state = self.state.lock().unwrap();
-        let param_idx = state
-            .param_names
-            .iter()
-            .position(|n| n == param_name);
-
-        let param_idx = match param_idx {
-            Some(idx) => idx,
-            None => {
-                drop(state);
-                return self
-                    .random_sampler
-                    .sample(study, trial, param_name, distribution);
-            }
-        };
-
-        let mean = state.mean[param_idx];
-        let sigma = state.sigma[param_idx];
-
-        // Sample from N(mean, sigma^2 * step_size^2)
+        // Sample from N(mean, sigma^2) in [0,1] space, clamp to [0,1]
         let normal: f64 = state.rng.sample(rand_distr::StandardNormal);
-        let raw_sample = mean + sigma * state.step_size * normal;
+        let internal_sample = (mean + sigma * normal).clamp(0.0, 1.0);
 
-        match distribution {
-            Distribution::Float(d) => {
-                raw_sample.clamp(d.low, d.high)
-            }
-            Distribution::Int(d) => {
-                let clamped = raw_sample.clamp(d.low as f64, d.high as f64);
-                let step = d.step.unwrap_or(1);
-                let shifted = clamped - d.low as f64;
-                let quantized = (shifted / step as f64).round() * step as f64 + d.low as f64;
-                (quantized.round() as i64).clamp(d.low, d.high) as f64
-            }
-            Distribution::Categorical(_) => {
-                // CMA-ES doesn't naturally handle categoricals — fall back to random
-                drop(state);
-                self.random_sampler
-                    .sample(study, trial, param_name, distribution)
-            }
-        }
+        Self::from_internal(internal_sample, distribution)
     }
 }
 
@@ -265,7 +224,6 @@ mod tests {
         ));
         let mut study = Study::new_default();
 
-        // Add startup trials
         for i in 0..15 {
             let value = (i as f64) * 0.5 + 1.0;
             let mut params = HashMap::new();
@@ -304,10 +262,9 @@ mod tests {
         let dist = Distribution::Float(crate::distributions::FloatDistribution::new(
             0.0, 1.0, false, None,
         ));
-        let study = Study::new_default(); // No trials
+        let study = Study::new_default();
         let trial = Trial::new(0);
 
-        // Should not panic, falls back to random
         let v = sampler.sample(&study, &trial, "x", &dist);
         assert!(v >= 0.0 && v <= 1.0);
     }
@@ -317,8 +274,7 @@ mod tests {
         let sampler = CmaEsSampler::new(
             CmaEsConfig {
                 n_startup_trials: 5,
-                population_size: 0,
-                sigma0: 2.0,
+                sigma0: 0.3,
             },
             42,
         );
@@ -327,7 +283,6 @@ mod tests {
         ));
         let mut study = Study::new_default();
 
-        // Run many trials minimizing (x - 3)^2
         for _ in 0..50 {
             let trial = Trial::new(study.trials().len());
             let x = sampler.sample(&study, &trial, "x", &dist);
@@ -337,8 +292,27 @@ mod tests {
             study.add_completed_trial(params, obj);
         }
 
-        // The best value should be close to 0 (x near 3)
         let best = study.best_value().unwrap();
         assert!(best < 5.0, "CMA-ES should converge, best={best}");
+    }
+
+    #[test]
+    fn test_cmaes_log_scale_float() {
+        let sampler = CmaEsSampler::with_seed(42);
+        let dist = Distribution::Float(crate::distributions::FloatDistribution::new(
+            1e-5, 1.0, true, None,
+        ));
+        let mut study = Study::new_default();
+
+        for i in 0..15 {
+            let v = 1e-5 * (1e5_f64).powf(i as f64 / 14.0);
+            let mut params = HashMap::new();
+            params.insert("lr".to_string(), v);
+            study.add_completed_trial(params, (v - 0.01).powi(2));
+        }
+
+        let trial = Trial::new(15);
+        let v = sampler.sample(&study, &trial, "lr", &dist);
+        assert!(v >= 1e-5 && v <= 1.0, "CMA-ES log-scale suggested {v} outside [1e-5, 1.0]");
     }
 }
