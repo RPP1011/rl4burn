@@ -1,8 +1,12 @@
 mod cmaes;
+mod grid;
+mod nsga2;
 mod random;
 mod tpe;
 
 pub use cmaes::{CmaEsConfig, CmaEsSampler};
+pub use grid::GridSampler;
+pub use nsga2::{NsgaIIConfig, NsgaIISampler};
 pub use random::RandomSampler;
 pub use tpe::{
     calculate_order, default_gamma, default_weights, gaussian_log_pdf,

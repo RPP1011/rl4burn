@@ -10,8 +10,6 @@ description = "Hyperparameter search algorithms inspired by Optuna, for rl4burn"
 rand = { workspace = true }
 rand_distr = { workspace = true }
 thiserror = { workspace = true }
-
-[dev-dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

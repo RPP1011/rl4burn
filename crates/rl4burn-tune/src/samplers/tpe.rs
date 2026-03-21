@@ -24,6 +24,9 @@ pub struct TpeSamplerConfig {
     pub consider_endpoints: bool,
     /// Whether to use multivariate TPE (false = independent).
     pub multivariate: bool,
+    /// Whether to use the constant liar strategy for parallel sampling.
+    /// When enabled, running trials are included with imputed values.
+    pub constant_liar: bool,
     /// Gamma function variant.
     pub gamma_strategy: GammaStrategy,
 }
@@ -47,6 +50,7 @@ impl Default for TpeSamplerConfig {
             consider_magic_clip: true,
             consider_endpoints: false,
             multivariate: false,
+            constant_liar: false,
             gamma_strategy: GammaStrategy::Default,
         }
     }
@@ -591,6 +595,66 @@ impl TpeSampler {
         }
     }
 
+    /// Compute a "lie" value for running trials based on completed trial values.
+    /// Uses the worst completed value (pessimistic constant liar).
+    fn compute_lie_value(&self, study: &Study) -> f64 {
+        let completed_values: Vec<f64> = study
+            .trials()
+            .iter()
+            .filter(|t| t.state == TrialState::Complete)
+            .filter_map(|t| t.value)
+            .collect();
+
+        if completed_values.is_empty() {
+            return 0.0;
+        }
+
+        // Pessimistic: use the worst value
+        match study.direction() {
+            crate::study::Direction::Minimize => {
+                completed_values
+                    .iter()
+                    .copied()
+                    .fold(f64::NEG_INFINITY, f64::max)
+            }
+            crate::study::Direction::Maximize => {
+                completed_values
+                    .iter()
+                    .copied()
+                    .fold(f64::INFINITY, f64::min)
+            }
+        }
+    }
+
+    /// Get effective trials for TPE, including running trials with imputed values
+    /// when constant_liar is enabled.
+    fn get_effective_trials<'a>(
+        &self,
+        study: &'a Study,
+        param_name: &str,
+    ) -> Vec<crate::trial::FrozenTrial> {
+        let mut trials: Vec<crate::trial::FrozenTrial> = study
+            .trials()
+            .iter()
+            .filter(|t| t.state == TrialState::Complete && t.params.contains_key(param_name))
+            .cloned()
+            .collect();
+
+        if self.config.constant_liar {
+            let lie_value = self.compute_lie_value(study);
+            for t in study.trials() {
+                if t.state == TrialState::Running && t.params.contains_key(param_name) {
+                    let mut imputed = t.clone();
+                    imputed.value = Some(lie_value);
+                    imputed.state = TrialState::Complete;
+                    trials.push(imputed);
+                }
+            }
+        }
+
+        trials
+    }
+
     /// Split completed trials into good/bad index groups, sorted by objective.
     /// Returns (good_indices, bad_indices) into the `completed` slice.
     fn split_trials(
@@ -907,9 +971,10 @@ mod tests {
 
     #[test]
     fn test_default_weights() {
-        assert_eq!(default_weights(0), vec![]);
-        assert_eq!(default_weights(1), vec![1.0]);
-        assert_eq!(default_weights(3), vec![1.0, 1.0, 1.0]);
+        let empty: Vec<f64> = vec![];
+        assert_eq!(default_weights(0), empty);
+        assert_eq!(default_weights(1), vec![1.0_f64]);
+        assert_eq!(default_weights(3), vec![1.0_f64, 1.0, 1.0]);
 
         let w = default_weights(30);
         assert_eq!(w.len(), 30);

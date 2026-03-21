@@ -4,8 +4,11 @@
 //! pruners, and the study/trial orchestration loop.
 
 pub mod distributions;
+pub mod importance;
+pub mod multi_objective;
 pub mod pruners;
 pub mod samplers;
+pub mod storage;
 pub mod study;
 pub mod trial;
 
@@ -13,11 +16,15 @@ pub mod trial;
 mod proofs;
 
 pub use distributions::*;
-pub use pruners::{HyperbandPruner, MedianPruner, PercentilePruner, Pruner};
+pub use pruners::{
+    HyperbandPruner, MedianPruner, NopPruner, PatientPruner, PercentilePruner, Pruner,
+    SuccessiveHalvingPruner, ThresholdPruner, WilcoxonPruner,
+};
 pub use samplers::{
     calculate_order, default_gamma, default_weights, gaussian_log_pdf, hyperopt_default_gamma,
-    CategoricalParzenEstimator, CmaEsConfig, CmaEsSampler, GammaStrategy, ParzenEstimator,
-    RandomSampler, Sampler, TpeSampler, TpeSamplerConfig,
+    CategoricalParzenEstimator, CmaEsConfig, CmaEsSampler, GammaStrategy, GridSampler,
+    NsgaIIConfig, NsgaIISampler, ParzenEstimator, RandomSampler, Sampler, TpeSampler,
+    TpeSamplerConfig,
 };
-pub use study::{Direction, Study, StudyConfig};
+pub use study::{Callback, Direction, Study, StudyConfig};
 pub use trial::{FrozenTrial, Trial, TrialState};

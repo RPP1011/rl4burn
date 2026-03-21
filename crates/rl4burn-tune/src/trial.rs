@@ -1,24 +1,39 @@
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::distributions::Distribution;
 
 /// State of a trial.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TrialState {
+    /// Trial has been created but not yet started (for ask/tell and enqueue).
+    Waiting,
+    /// Trial is currently being evaluated.
     Running,
+    /// Trial completed successfully.
     Complete,
+    /// Trial was pruned (stopped early).
     Pruned,
+    /// Trial failed with an error.
     Fail,
 }
 
 /// A frozen (immutable) record of a completed or pruned trial.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FrozenTrial {
     pub number: usize,
     pub state: TrialState,
     pub value: Option<f64>,
+    /// Multiple objective values for multi-objective optimization.
+    /// For single-objective studies, this is `None` and `value` is used instead.
+    pub values: Option<Vec<f64>>,
     pub params: HashMap<String, f64>,
     pub intermediate_values: HashMap<usize, f64>,
+    /// User-defined attributes for arbitrary metadata.
+    pub user_attrs: HashMap<String, String>,
+    /// System-defined attributes used internally by samplers/pruners.
+    pub system_attrs: HashMap<String, String>,
 }
 
 impl FrozenTrial {
@@ -27,8 +42,11 @@ impl FrozenTrial {
             number,
             state: TrialState::Running,
             value: None,
+            values: None,
             params: HashMap::new(),
             intermediate_values: HashMap::new(),
+            user_attrs: HashMap::new(),
+            system_attrs: HashMap::new(),
         }
     }
 
@@ -41,6 +59,40 @@ impl FrozenTrial {
     pub fn last_step(&self) -> usize {
         self.intermediate_values.keys().copied().max().unwrap_or(0)
     }
+
+    /// Validate the trial's internal consistency.
+    ///
+    /// Returns `Err` with a description if the trial is malformed.
+    pub fn validate(&self) -> Result<(), String> {
+        match self.state {
+            TrialState::Complete => {
+                if self.value.is_none() {
+                    return Err(format!(
+                        "Trial {} is Complete but has no value",
+                        self.number
+                    ));
+                }
+            }
+            TrialState::Waiting => {
+                if self.value.is_some() {
+                    return Err(format!(
+                        "Trial {} is Waiting but has a value",
+                        self.number
+                    ));
+                }
+            }
+            TrialState::Running => {
+                if self.value.is_some() {
+                    return Err(format!(
+                        "Trial {} is Running but has a value",
+                        self.number
+                    ));
+                }
+            }
+            TrialState::Pruned | TrialState::Fail => {}
+        }
+        Ok(())
+    }
 }
 
 /// A trial in progress, providing the suggest API.
@@ -50,6 +102,10 @@ pub struct Trial {
     pub intermediate_values: HashMap<usize, f64>,
     /// Whether this trial has been marked as pruned.
     pub pruned: bool,
+    /// User-defined attributes for arbitrary metadata.
+    pub user_attrs: HashMap<String, String>,
+    /// System-defined attributes used internally by samplers/pruners.
+    pub system_attrs: HashMap<String, String>,
 }
 
 impl Trial {
@@ -59,7 +115,19 @@ impl Trial {
             params: HashMap::new(),
             intermediate_values: HashMap::new(),
             pruned: false,
+            user_attrs: HashMap::new(),
+            system_attrs: HashMap::new(),
         }
+    }
+
+    /// Set a user-defined attribute.
+    pub fn set_user_attr(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.user_attrs.insert(key.into(), value.into());
+    }
+
+    /// Set a system-defined attribute.
+    pub fn set_system_attr(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.system_attrs.insert(key.into(), value.into());
     }
 
     /// Suggest a parameter value.
@@ -152,8 +220,11 @@ impl Trial {
             number: self.number,
             state: TrialState::Running,
             value: None,
+            values: None,
             params: self.params.clone(),
             intermediate_values: self.intermediate_values.clone(),
+            user_attrs: self.user_attrs.clone(),
+            system_attrs: self.system_attrs.clone(),
         };
 
         if pruner.prune(study, &frozen) {
