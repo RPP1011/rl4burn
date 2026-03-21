@@ -22,9 +22,9 @@ pub use pruners::{
 };
 pub use samplers::{
     calculate_order, default_gamma, default_weights, gaussian_log_pdf, hyperopt_default_gamma,
-    CategoricalParzenEstimator, CmaEsConfig, CmaEsSampler, GammaStrategy, GridSampler,
-    NsgaIIConfig, NsgaIISampler, ParzenEstimator, RandomSampler, Sampler, TpeSampler,
-    TpeSamplerConfig,
+    CategoricalParzenEstimator, CmaEsConfig, CmaEsSampler, CrossoverType, GammaStrategy,
+    GpConfig, GpSampler, GridSampler, NsgaIIConfig, NsgaIISampler, ParzenEstimator,
+    RandomSampler, Sampler, TpeSampler, TpeSamplerConfig,
 };
 pub use study::{Callback, Direction, Study, StudyConfig};
 pub use trial::{FrozenTrial, Trial, TrialState};

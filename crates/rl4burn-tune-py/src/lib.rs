@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 use pyo3::prelude::*;
 use rl4burn_tune::{
@@ -29,15 +30,7 @@ impl PyStudy {
     #[new]
     #[pyo3(signature = (direction = "minimize"))]
     fn new(direction: &str) -> PyResult<Self> {
-        let dir = match direction {
-            "minimize" => rl4burn_tune::study::Direction::Minimize,
-            "maximize" => rl4burn_tune::study::Direction::Maximize,
-            _ => {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "direction must be 'minimize' or 'maximize'",
-                ))
-            }
-        };
+        let dir = parse_direction(direction)?;
         Ok(Self {
             inner: rl4burn_tune::Study::new(dir),
         })
@@ -46,16 +39,7 @@ impl PyStudy {
     /// Create a multi-objective study.
     #[staticmethod]
     fn create_multi(directions: Vec<String>) -> PyResult<Self> {
-        let dirs: Result<Vec<_>, _> = directions
-            .iter()
-            .map(|d| match d.as_str() {
-                "minimize" => Ok(rl4burn_tune::study::Direction::Minimize),
-                "maximize" => Ok(rl4burn_tune::study::Direction::Maximize),
-                _ => Err(pyo3::exceptions::PyValueError::new_err(
-                    "direction must be 'minimize' or 'maximize'",
-                )),
-            })
-            .collect();
+        let dirs: Result<Vec<_>, _> = directions.iter().map(|d| parse_direction(d)).collect();
         Ok(Self {
             inner: rl4burn_tune::Study::new_multi(dirs?),
         })
@@ -93,17 +77,24 @@ impl PyStudy {
         let inner_trial = trial.inner.take().ok_or_else(|| {
             pyo3::exceptions::PyRuntimeError::new_err("Trial has already been told")
         })?;
-        let trial_state = match state {
-            "complete" => rl4burn_tune::trial::TrialState::Complete,
-            "pruned" => rl4burn_tune::trial::TrialState::Pruned,
-            "fail" => rl4burn_tune::trial::TrialState::Fail,
-            _ => {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "state must be 'complete', 'pruned', or 'fail'",
-                ))
-            }
-        };
+        let trial_state = parse_trial_state(state)?;
         self.inner.tell(inner_trial, trial_state, value);
+        Ok(())
+    }
+
+    /// Tell the study the result of a multi-objective trial.
+    #[pyo3(signature = (trial, values, state = "complete"))]
+    fn tell_multi(
+        &mut self,
+        trial: &mut PyTrial,
+        values: Vec<f64>,
+        state: &str,
+    ) -> PyResult<()> {
+        let inner_trial = trial.inner.take().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("Trial has already been told")
+        })?;
+        let trial_state = parse_trial_state(state)?;
+        self.inner.tell_multi(inner_trial, trial_state, values);
         Ok(())
     }
 
@@ -147,6 +138,14 @@ impl PyStudy {
                         "params".to_string(),
                         t.params.clone().into_pyobject(py).unwrap().into_any().unbind(),
                     );
+                    if let Some(ref cv) = t.constraint_values {
+                        d.insert(
+                            "constraint_values".to_string(),
+                            cv.clone().into_pyobject(py).unwrap().into_any().unbind(),
+                        );
+                    }
+                    let feasible: PyObject = t.is_feasible().into_pyobject(py).unwrap().to_owned().unbind().into();
+                    d.insert("is_feasible".to_string(), feasible);
                     d
                 })
                 .collect()
@@ -221,12 +220,29 @@ impl PyTrial {
         Ok(())
     }
 
+    /// Check if the trial should be pruned.
+    fn should_prune(&mut self, study: &PyStudy, pruner: &PyPruner) -> PyResult<bool> {
+        let trial = self.inner.as_mut().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("Trial has already been told")
+        })?;
+        Ok(trial.should_prune(&study.inner, Some(pruner.as_pruner())))
+    }
+
     /// Set a user attribute.
     fn set_user_attr(&mut self, key: String, value: String) -> PyResult<()> {
         let trial = self.inner.as_mut().ok_or_else(|| {
             pyo3::exceptions::PyRuntimeError::new_err("Trial has already been told")
         })?;
         trial.set_user_attr(key, value);
+        Ok(())
+    }
+
+    /// Set constraint values for constrained optimization.
+    fn set_constraints(&mut self, values: Vec<f64>) -> PyResult<()> {
+        let trial = self.inner.as_mut().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("Trial has already been told")
+        })?;
+        trial.set_constraints(values);
         Ok(())
     }
 
@@ -249,6 +265,10 @@ impl PyTrial {
     }
 }
 
+// ============================================================
+// Sampler bindings
+// ============================================================
+
 /// Enum wrapping all sampler types for Python.
 #[pyclass(name = "Sampler")]
 struct PySampler {
@@ -260,6 +280,7 @@ enum SamplerKind {
     Tpe(rl4burn_tune::TpeSampler),
     CmaEs(rl4burn_tune::CmaEsSampler),
     NsgaII(rl4burn_tune::NsgaIISampler),
+    Gp(rl4burn_tune::GpSampler),
 }
 
 impl PySampler {
@@ -269,6 +290,7 @@ impl PySampler {
             SamplerKind::Tpe(s) => s,
             SamplerKind::CmaEs(s) => s,
             SamplerKind::NsgaII(s) => s,
+            SamplerKind::Gp(s) => s,
         }
     }
 }
@@ -283,11 +305,12 @@ fn random_sampler(seed: u64) -> PySampler {
 
 /// Create a TPE sampler.
 #[pyfunction]
-#[pyo3(signature = (seed, n_startup_trials = 10, constant_liar = false))]
-fn tpe_sampler(seed: u64, n_startup_trials: usize, constant_liar: bool) -> PySampler {
+#[pyo3(signature = (seed, n_startup_trials = 10, constant_liar = false, multivariate = false))]
+fn tpe_sampler(seed: u64, n_startup_trials: usize, constant_liar: bool, multivariate: bool) -> PySampler {
     let config = rl4burn_tune::TpeSamplerConfig {
         n_startup_trials,
         constant_liar,
+        multivariate,
         ..Default::default()
     };
     PySampler {
@@ -297,10 +320,11 @@ fn tpe_sampler(seed: u64, n_startup_trials: usize, constant_liar: bool) -> PySam
 
 /// Create a CMA-ES sampler.
 #[pyfunction]
-#[pyo3(signature = (seed, n_startup_trials = 10))]
-fn cmaes_sampler(seed: u64, n_startup_trials: usize) -> PySampler {
+#[pyo3(signature = (seed, n_startup_trials = 10, population_size = None))]
+fn cmaes_sampler(seed: u64, n_startup_trials: usize, population_size: Option<usize>) -> PySampler {
     let config = rl4burn_tune::CmaEsConfig {
         n_startup_trials,
+        population_size,
         ..Default::default()
     };
     PySampler {
@@ -310,14 +334,303 @@ fn cmaes_sampler(seed: u64, n_startup_trials: usize) -> PySampler {
 
 /// Create an NSGA-II sampler.
 #[pyfunction]
-#[pyo3(signature = (seed, population_size = 50))]
-fn nsga2_sampler(seed: u64, population_size: usize) -> PySampler {
+#[pyo3(signature = (seed, population_size = 50, crossover_type = "sbx"))]
+fn nsga2_sampler(seed: u64, population_size: usize, crossover_type: &str) -> PyResult<PySampler> {
+    let ct = match crossover_type {
+        "sbx" => rl4burn_tune::CrossoverType::SBX,
+        "uniform" => rl4burn_tune::CrossoverType::Uniform,
+        _ => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "crossover_type must be 'sbx' or 'uniform'",
+            ))
+        }
+    };
     let config = rl4burn_tune::NsgaIIConfig {
         population_size,
+        crossover_type: ct,
         ..Default::default()
     };
-    PySampler {
+    Ok(PySampler {
         inner: SamplerKind::NsgaII(rl4burn_tune::NsgaIISampler::new(config, seed)),
+    })
+}
+
+/// Create a Gaussian Process sampler.
+#[pyfunction]
+#[pyo3(signature = (seed, n_startup_trials = 10, n_candidates = 2000))]
+fn gp_sampler(seed: u64, n_startup_trials: usize, n_candidates: usize) -> PySampler {
+    let config = rl4burn_tune::GpConfig {
+        n_startup_trials,
+        n_candidates,
+    };
+    PySampler {
+        inner: SamplerKind::Gp(rl4burn_tune::GpSampler::new(config, seed)),
+    }
+}
+
+// ============================================================
+// Pruner bindings
+// ============================================================
+
+/// Enum wrapping all pruner types for Python.
+#[pyclass(name = "Pruner")]
+struct PyPruner {
+    inner: PrunerKind,
+}
+
+enum PrunerKind {
+    Nop(rl4burn_tune::NopPruner),
+    Median(rl4burn_tune::MedianPruner),
+    Percentile(rl4burn_tune::PercentilePruner),
+    Threshold(rl4burn_tune::ThresholdPruner),
+    Patient(rl4burn_tune::PatientPruner),
+    SuccessiveHalving(rl4burn_tune::SuccessiveHalvingPruner),
+    Hyperband(rl4burn_tune::HyperbandPruner),
+    Wilcoxon(rl4burn_tune::WilcoxonPruner),
+}
+
+impl PyPruner {
+    fn as_pruner(&self) -> &dyn rl4burn_tune::Pruner {
+        match &self.inner {
+            PrunerKind::Nop(p) => p,
+            PrunerKind::Median(p) => p,
+            PrunerKind::Percentile(p) => p,
+            PrunerKind::Threshold(p) => p,
+            PrunerKind::Patient(p) => p,
+            PrunerKind::SuccessiveHalving(p) => p,
+            PrunerKind::Hyperband(p) => p,
+            PrunerKind::Wilcoxon(p) => p,
+        }
+    }
+}
+
+/// Create a NopPruner (never prunes).
+#[pyfunction]
+fn nop_pruner() -> PyPruner {
+    PyPruner {
+        inner: PrunerKind::Nop(rl4burn_tune::NopPruner),
+    }
+}
+
+/// Create a MedianPruner.
+#[pyfunction]
+#[pyo3(signature = (n_startup_trials = 5, n_warmup_steps = 0, interval_steps = 1))]
+fn median_pruner(n_startup_trials: usize, n_warmup_steps: usize, interval_steps: usize) -> PyPruner {
+    PyPruner {
+        inner: PrunerKind::Median(rl4burn_tune::MedianPruner::new(
+            n_startup_trials,
+            n_warmup_steps,
+            interval_steps,
+        )),
+    }
+}
+
+/// Create a PercentilePruner.
+#[pyfunction]
+#[pyo3(signature = (percentile = 50.0, n_startup_trials = 5, n_warmup_steps = 0, interval_steps = 1))]
+fn percentile_pruner(
+    percentile: f64,
+    n_startup_trials: usize,
+    n_warmup_steps: usize,
+    interval_steps: usize,
+) -> PyPruner {
+    PyPruner {
+        inner: PrunerKind::Percentile(rl4burn_tune::PercentilePruner::new(
+            percentile,
+            n_startup_trials,
+            n_warmup_steps,
+            interval_steps,
+        )),
+    }
+}
+
+/// Create a ThresholdPruner.
+#[pyfunction]
+#[pyo3(signature = (upper = None, lower = None, n_warmup_steps = 0))]
+fn threshold_pruner(upper: Option<f64>, lower: Option<f64>, n_warmup_steps: usize) -> PyPruner {
+    PyPruner {
+        inner: PrunerKind::Threshold(rl4burn_tune::ThresholdPruner::new(
+            upper,
+            lower,
+            n_warmup_steps,
+        )),
+    }
+}
+
+/// Create a PatientPruner wrapping a MedianPruner.
+#[pyfunction]
+#[pyo3(signature = (patience = 3, n_startup_trials = 5, n_warmup_steps = 0, interval_steps = 1))]
+fn patient_pruner(
+    patience: usize,
+    n_startup_trials: usize,
+    n_warmup_steps: usize,
+    interval_steps: usize,
+) -> PyPruner {
+    let inner = rl4burn_tune::MedianPruner::new(n_startup_trials, n_warmup_steps, interval_steps);
+    PyPruner {
+        inner: PrunerKind::Patient(rl4burn_tune::PatientPruner::new(
+            Box::new(inner),
+            patience,
+        )),
+    }
+}
+
+/// Create a SuccessiveHalvingPruner.
+#[pyfunction]
+#[pyo3(signature = (min_resource = 1, reduction_factor = 3, n_warmup_steps = 0))]
+fn successive_halving_pruner(
+    min_resource: usize,
+    reduction_factor: usize,
+    n_warmup_steps: usize,
+) -> PyPruner {
+    PyPruner {
+        inner: PrunerKind::SuccessiveHalving(rl4burn_tune::SuccessiveHalvingPruner::new(
+            min_resource,
+            reduction_factor,
+            n_warmup_steps,
+        )),
+    }
+}
+
+/// Create a HyperbandPruner.
+#[pyfunction]
+#[pyo3(signature = (min_resource = 1, max_resource = 100, reduction_factor = 3))]
+fn hyperband_pruner(min_resource: usize, max_resource: usize, reduction_factor: usize) -> PyPruner {
+    PyPruner {
+        inner: PrunerKind::Hyperband(rl4burn_tune::HyperbandPruner::new(
+            min_resource,
+            max_resource,
+            reduction_factor,
+        )),
+    }
+}
+
+/// Create a WilcoxonPruner.
+#[pyfunction]
+#[pyo3(signature = (p_threshold = 0.1, n_min_steps = 5, n_startup_trials = 5))]
+fn wilcoxon_pruner(p_threshold: f64, n_min_steps: usize, n_startup_trials: usize) -> PyPruner {
+    PyPruner {
+        inner: PrunerKind::Wilcoxon(rl4burn_tune::WilcoxonPruner::new(
+            p_threshold,
+            n_min_steps,
+            n_startup_trials,
+        )),
+    }
+}
+
+// ============================================================
+// Storage bindings
+// ============================================================
+
+/// Python wrapper for storage backends.
+#[pyclass(name = "Storage")]
+struct PyStorage {
+    inner: Mutex<Box<dyn rl4burn_tune::storage::Storage>>,
+}
+
+#[pymethods]
+impl PyStorage {
+    /// Create a new study and return its ID.
+    fn create_study(&self, direction: &str) -> PyResult<usize> {
+        let dir = parse_direction(direction)?;
+        let mut storage = self.inner.lock().unwrap();
+        storage
+            .create_study(dir)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Get all trials for a study.
+    fn get_all_trials(&self, study_id: usize) -> PyResult<Vec<HashMap<String, PyObject>>> {
+        let storage = self.inner.lock().unwrap();
+        let trials = storage
+            .get_all_trials(study_id)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        Ok(Python::with_gil(|py| {
+            trials
+                .iter()
+                .map(|t| {
+                    let mut d = HashMap::new();
+                    d.insert("number".to_string(), t.number.into_pyobject(py).unwrap().into_any().unbind());
+                    d.insert(
+                        "state".to_string(),
+                        format!("{:?}", t.state).into_pyobject(py).unwrap().into_any().unbind(),
+                    );
+                    if let Some(v) = t.value {
+                        d.insert("value".to_string(), v.into_pyobject(py).unwrap().into_any().unbind());
+                    }
+                    d.insert(
+                        "params".to_string(),
+                        t.params.clone().into_pyobject(py).unwrap().into_any().unbind(),
+                    );
+                    d
+                })
+                .collect()
+        }))
+    }
+
+    /// Add a trial to a study.
+    fn add_trial(
+        &self,
+        study_id: usize,
+        number: usize,
+        params: HashMap<String, f64>,
+        value: Option<f64>,
+        state: &str,
+    ) -> PyResult<()> {
+        let trial_state = parse_trial_state(state)?;
+        let mut trial = rl4burn_tune::FrozenTrial::new(number);
+        trial.params = params;
+        trial.value = value;
+        trial.state = trial_state;
+
+        let mut storage = self.inner.lock().unwrap();
+        storage
+            .add_trial(study_id, trial)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+}
+
+/// Create an in-memory storage backend.
+#[pyfunction]
+fn in_memory_storage() -> PyStorage {
+    PyStorage {
+        inner: Mutex::new(Box::new(rl4burn_tune::storage::InMemoryStorage::new())),
+    }
+}
+
+/// Create a journal file storage backend.
+#[pyfunction]
+fn journal_storage(path: &str) -> PyResult<PyStorage> {
+    let storage = rl4burn_tune::storage::JournalStorage::open(path)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+    Ok(PyStorage {
+        inner: Mutex::new(Box::new(storage)),
+    })
+}
+
+// ============================================================
+// Helper functions
+// ============================================================
+
+fn parse_direction(s: &str) -> PyResult<rl4burn_tune::study::Direction> {
+    match s {
+        "minimize" => Ok(rl4burn_tune::study::Direction::Minimize),
+        "maximize" => Ok(rl4burn_tune::study::Direction::Maximize),
+        _ => Err(pyo3::exceptions::PyValueError::new_err(
+            "direction must be 'minimize' or 'maximize'",
+        )),
+    }
+}
+
+fn parse_trial_state(s: &str) -> PyResult<rl4burn_tune::trial::TrialState> {
+    match s {
+        "complete" => Ok(rl4burn_tune::trial::TrialState::Complete),
+        "pruned" => Ok(rl4burn_tune::trial::TrialState::Pruned),
+        "fail" => Ok(rl4burn_tune::trial::TrialState::Fail),
+        _ => Err(pyo3::exceptions::PyValueError::new_err(
+            "state must be 'complete', 'pruned', or 'fail'",
+        )),
     }
 }
 
@@ -492,12 +805,29 @@ fn rl4burn_tune_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStudy>()?;
     m.add_class::<PyTrial>()?;
     m.add_class::<PySampler>()?;
+    m.add_class::<PyPruner>()?;
+    m.add_class::<PyStorage>()?;
 
     // Sampler constructors
     m.add_function(wrap_pyfunction!(random_sampler, m)?)?;
     m.add_function(wrap_pyfunction!(tpe_sampler, m)?)?;
     m.add_function(wrap_pyfunction!(cmaes_sampler, m)?)?;
     m.add_function(wrap_pyfunction!(nsga2_sampler, m)?)?;
+    m.add_function(wrap_pyfunction!(gp_sampler, m)?)?;
+
+    // Pruner constructors
+    m.add_function(wrap_pyfunction!(nop_pruner, m)?)?;
+    m.add_function(wrap_pyfunction!(median_pruner, m)?)?;
+    m.add_function(wrap_pyfunction!(percentile_pruner, m)?)?;
+    m.add_function(wrap_pyfunction!(threshold_pruner, m)?)?;
+    m.add_function(wrap_pyfunction!(patient_pruner, m)?)?;
+    m.add_function(wrap_pyfunction!(successive_halving_pruner, m)?)?;
+    m.add_function(wrap_pyfunction!(hyperband_pruner, m)?)?;
+    m.add_function(wrap_pyfunction!(wilcoxon_pruner, m)?)?;
+
+    // Storage constructors
+    m.add_function(wrap_pyfunction!(in_memory_storage, m)?)?;
+    m.add_function(wrap_pyfunction!(journal_storage, m)?)?;
 
     // Low-level functions (backward compatible)
     m.add_function(wrap_pyfunction!(default_gamma, m)?)?;

@@ -1,8 +1,8 @@
 //! NSGA-II (Non-dominated Sorting Genetic Algorithm II) sampler.
 //!
 //! A multi-objective evolutionary sampler that uses non-dominated sorting
-//! and crowding distance for selection, with uniform crossover and
-//! random mutation.
+//! and crowding distance for selection, with SBX crossover and polynomial
+//! mutation (matching Optuna's canonical NSGA-II implementation).
 
 use std::sync::Mutex;
 
@@ -16,6 +16,15 @@ use crate::samplers::Sampler;
 use crate::study::Study;
 use crate::trial::{FrozenTrial, Trial, TrialState};
 
+/// Crossover operator type for NSGA-II.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CrossoverType {
+    /// Simple uniform crossover (swap parameters with probability).
+    Uniform,
+    /// Simulated Binary Crossover — the canonical NSGA-II operator.
+    SBX,
+}
+
 /// Configuration for the NSGA-II sampler.
 #[derive(Debug, Clone)]
 pub struct NsgaIIConfig {
@@ -26,19 +35,31 @@ pub struct NsgaIIConfig {
     /// Probability of mutating each parameter.
     pub mutation_prob: f64,
     /// Standard deviation for Gaussian mutation (in normalized [0,1] space).
+    /// Used only with Uniform crossover; SBX uses polynomial mutation.
     pub mutation_sigma: f64,
     /// Number of random startup trials before evolutionary sampling begins.
     pub n_startup_trials: usize,
+    /// Crossover operator type.
+    pub crossover_type: CrossoverType,
+    /// Distribution index for SBX crossover. Higher values produce children
+    /// closer to parents. Default 20 (matches canonical NSGA-II).
+    pub eta_c: f64,
+    /// Distribution index for polynomial mutation. Higher values produce
+    /// smaller perturbations. Default 20 (matches canonical NSGA-II).
+    pub eta_m: f64,
 }
 
 impl Default for NsgaIIConfig {
     fn default() -> Self {
         Self {
             population_size: 50,
-            crossover_prob: 0.5,
+            crossover_prob: 0.9,
             mutation_prob: 0.2,
             mutation_sigma: 0.1,
             n_startup_trials: 50,
+            crossover_type: CrossoverType::SBX,
+            eta_c: 20.0,
+            eta_m: 20.0,
         }
     }
 }
@@ -89,6 +110,108 @@ impl NsgaIISampler {
         } else {
             completed[j]
         }
+    }
+
+    /// Simulated Binary Crossover (SBX) for a single parameter.
+    /// Returns the child value.
+    fn sbx_crossover(
+        p1: f64,
+        p2: f64,
+        low: f64,
+        high: f64,
+        eta_c: f64,
+        rng: &mut StdRng,
+    ) -> f64 {
+        if (p1 - p2).abs() < 1e-14 {
+            return p1;
+        }
+
+        let (y1, y2) = if p1 < p2 { (p1, p2) } else { (p2, p1) };
+
+        let u: f64 = rng.random();
+
+        // Bounded SBX
+        let diff = (y2 - y1).max(1e-14);
+        let beta1 = 1.0 + 2.0 * (y1 - low) / diff;
+        let beta2 = 1.0 + 2.0 * (high - y2) / diff;
+
+        let alpha1 = 2.0 - beta1.powf(-(eta_c + 1.0));
+        let alpha2 = 2.0 - beta2.powf(-(eta_c + 1.0));
+
+        let betaq1 = if u <= 1.0 / alpha1 {
+            (u * alpha1).powf(1.0 / (eta_c + 1.0))
+        } else {
+            (1.0 / (2.0 - u * alpha1)).powf(1.0 / (eta_c + 1.0))
+        };
+
+        let betaq2 = if u <= 1.0 / alpha2 {
+            (u * alpha2).powf(1.0 / (eta_c + 1.0))
+        } else {
+            (1.0 / (2.0 - u * alpha2)).powf(1.0 / (eta_c + 1.0))
+        };
+
+        let c1 = 0.5 * ((y1 + y2) - betaq1 * diff);
+        let c2 = 0.5 * ((y1 + y2) + betaq2 * diff);
+
+        // Randomly pick one child
+        let child = if rng.random_bool(0.5) { c1 } else { c2 };
+        child.clamp(low, high)
+    }
+
+    /// Polynomial mutation for a single parameter.
+    fn polynomial_mutation(
+        value: f64,
+        low: f64,
+        high: f64,
+        eta_m: f64,
+        rng: &mut StdRng,
+    ) -> f64 {
+        let u: f64 = rng.random();
+        let range = high - low;
+        if range < 1e-14 {
+            return value;
+        }
+
+        let delta1 = (value - low) / range;
+        let delta2 = (high - value) / range;
+
+        let deltaq = if u < 0.5 {
+            let xy = 1.0 - delta1;
+            let val = 2.0 * u + (1.0 - 2.0 * u) * xy.powf(eta_m + 1.0);
+            val.powf(1.0 / (eta_m + 1.0)) - 1.0
+        } else {
+            let xy = 1.0 - delta2;
+            let val = 2.0 * (1.0 - u) + 2.0 * (u - 0.5) * xy.powf(eta_m + 1.0);
+            1.0 - val.powf(1.0 / (eta_m + 1.0))
+        };
+
+        let mutated = value + deltaq * range;
+        mutated.clamp(low, high)
+    }
+
+    /// Get the elite population: top `population_size` individuals by rank + crowding.
+    fn select_elite<'a>(
+        &self,
+        completed: &[&'a FrozenTrial],
+        ranks: &[usize],
+        distances: &[f64],
+    ) -> Vec<usize> {
+        let n = completed.len();
+        let mut indices: Vec<usize> = (0..n).collect();
+
+        // Sort by rank (ascending), then crowding distance (descending)
+        indices.sort_by(|&a, &b| {
+            ranks[a]
+                .cmp(&ranks[b])
+                .then_with(|| {
+                    distances[b]
+                        .partial_cmp(&distances[a])
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+        });
+
+        indices.truncate(self.config.population_size);
+        indices
     }
 }
 
@@ -148,9 +271,20 @@ impl Sampler for NsgaIISampler {
             }
         }
 
-        // Select two parents via tournament selection
-        let parent1 = self.select_parent(&completed, &ranks, &distances, &mut rng);
-        let parent2 = self.select_parent(&completed, &ranks, &distances, &mut rng);
+        // Select elite population
+        let elite_indices = self.select_elite(&completed, &ranks, &distances);
+
+        // Build elite-only vectors for parent selection
+        let elite_completed: Vec<&FrozenTrial> =
+            elite_indices.iter().map(|&i| completed[i]).collect();
+        let elite_ranks: Vec<usize> = elite_indices.iter().map(|&i| ranks[i]).collect();
+        let elite_distances: Vec<f64> = elite_indices.iter().map(|&i| distances[i]).collect();
+
+        // Select two parents via tournament selection from elite
+        let parent1 =
+            self.select_parent(&elite_completed, &elite_ranks, &elite_distances, &mut rng);
+        let parent2 =
+            self.select_parent(&elite_completed, &elite_ranks, &elite_distances, &mut rng);
 
         // Get parent values for this parameter
         let p1_val = parent1.params.get(param_name);
@@ -158,55 +292,110 @@ impl Sampler for NsgaIISampler {
 
         match (p1_val, p2_val) {
             (Some(&v1), Some(&v2)) => {
-                // Uniform crossover
-                let child_val = if rng.random_bool(self.config.crossover_prob) {
-                    v2
-                } else {
-                    v1
-                };
-
-                // Mutation
-                if rng.random_bool(self.config.mutation_prob) {
-                    match distribution {
-                        Distribution::Float(d) => {
-                            let range = if d.log {
-                                d.high.ln() - d.low.ln()
-                            } else {
-                                d.high - d.low
-                            };
-                            let noise: f64 =
-                                rng.random_range(-1.0..1.0) * self.config.mutation_sigma * range;
-                            let mutated = if d.log {
-                                (child_val.ln() + noise).exp()
-                            } else {
-                                child_val + noise
-                            };
-                            let clamped = mutated.clamp(d.low, d.high);
-                            if let Some(step) = d.step {
-                                let shifted = clamped - d.low;
-                                (shifted / step).round() * step + d.low
-                            } else {
-                                clamped
+                match &self.config.crossover_type {
+                    CrossoverType::SBX => {
+                        // SBX crossover + polynomial mutation
+                        let child_val = match distribution {
+                            Distribution::Float(d) => {
+                                let child = if rng.random_bool(self.config.crossover_prob) {
+                                    Self::sbx_crossover(v1, v2, d.low, d.high, self.config.eta_c, &mut rng)
+                                } else {
+                                    if rng.random_bool(0.5) { v1 } else { v2 }
+                                };
+                                let mutated = if rng.random_bool(self.config.mutation_prob) {
+                                    Self::polynomial_mutation(child, d.low, d.high, self.config.eta_m, &mut rng)
+                                } else {
+                                    child
+                                };
+                                if let Some(step) = d.step {
+                                    let shifted = mutated - d.low;
+                                    (shifted / step).round() * step + d.low
+                                } else {
+                                    mutated
+                                }
                             }
-                        }
-                        Distribution::Int(d) => {
-                            let range = (d.high - d.low) as f64;
-                            let noise =
-                                rng.random_range(-1.0..1.0) * self.config.mutation_sigma * range;
-                            let mutated = (child_val + noise).round();
-                            let step = d.step.unwrap_or(1) as f64;
-                            let shifted = mutated - d.low as f64;
-                            let quantized =
-                                (shifted / step).round() * step + d.low as f64;
-                            quantized.clamp(d.low as f64, d.high as f64)
-                        }
-                        Distribution::Categorical(d) => {
-                            // Random category mutation
-                            rng.random_range(0..d.choices.len()) as f64
+                            Distribution::Int(d) => {
+                                let low = d.low as f64;
+                                let high = d.high as f64;
+                                let child = if rng.random_bool(self.config.crossover_prob) {
+                                    Self::sbx_crossover(v1, v2, low, high, self.config.eta_c, &mut rng)
+                                } else {
+                                    if rng.random_bool(0.5) { v1 } else { v2 }
+                                };
+                                let mutated = if rng.random_bool(self.config.mutation_prob) {
+                                    Self::polynomial_mutation(child, low, high, self.config.eta_m, &mut rng)
+                                } else {
+                                    child
+                                };
+                                let step = d.step.unwrap_or(1) as f64;
+                                let shifted = mutated - low;
+                                let quantized = (shifted / step).round() * step + low;
+                                quantized.clamp(low, high)
+                            }
+                            Distribution::Categorical(d) => {
+                                // Categorical: uniform crossover + random mutation
+                                let child = if rng.random_bool(0.5) { v1 } else { v2 };
+                                if rng.random_bool(self.config.mutation_prob) {
+                                    rng.random_range(0..d.choices.len()) as f64
+                                } else {
+                                    child
+                                }
+                            }
+                        };
+                        child_val
+                    }
+                    CrossoverType::Uniform => {
+                        // Original uniform crossover + Gaussian mutation
+                        let child_val = if rng.random_bool(self.config.crossover_prob) {
+                            v2
+                        } else {
+                            v1
+                        };
+
+                        if rng.random_bool(self.config.mutation_prob) {
+                            match distribution {
+                                Distribution::Float(d) => {
+                                    let range = if d.log {
+                                        d.high.ln() - d.low.ln()
+                                    } else {
+                                        d.high - d.low
+                                    };
+                                    let noise: f64 = rng.random_range(-1.0..1.0)
+                                        * self.config.mutation_sigma
+                                        * range;
+                                    let mutated = if d.log {
+                                        (child_val.ln() + noise).exp()
+                                    } else {
+                                        child_val + noise
+                                    };
+                                    let clamped = mutated.clamp(d.low, d.high);
+                                    if let Some(step) = d.step {
+                                        let shifted = clamped - d.low;
+                                        (shifted / step).round() * step + d.low
+                                    } else {
+                                        clamped
+                                    }
+                                }
+                                Distribution::Int(d) => {
+                                    let range = (d.high - d.low) as f64;
+                                    let noise = rng.random_range(-1.0..1.0)
+                                        * self.config.mutation_sigma
+                                        * range;
+                                    let mutated = (child_val + noise).round();
+                                    let step = d.step.unwrap_or(1) as f64;
+                                    let shifted = mutated - d.low as f64;
+                                    let quantized =
+                                        (shifted / step).round() * step + d.low as f64;
+                                    quantized.clamp(d.low as f64, d.high as f64)
+                                }
+                                Distribution::Categorical(d) => {
+                                    rng.random_range(0..d.choices.len()) as f64
+                                }
+                            }
+                        } else {
+                            child_val
                         }
                     }
-                } else {
-                    child_val
                 }
             }
             _ => {
@@ -263,6 +452,78 @@ mod tests {
             0.0, 20.0, false, None,
         ));
 
+        let v = sampler.sample(&study, &trial, "x", &dist);
+        assert!((0.0..=20.0).contains(&v));
+    }
+
+    #[test]
+    fn test_sbx_crossover_bounded() {
+        let mut rng = StdRng::seed_from_u64(42);
+        for _ in 0..100 {
+            let child = NsgaIISampler::sbx_crossover(3.0, 7.0, 0.0, 10.0, 20.0, &mut rng);
+            assert!(
+                (0.0..=10.0).contains(&child),
+                "SBX child {child} out of [0, 10]"
+            );
+        }
+    }
+
+    #[test]
+    fn test_sbx_crossover_produces_children_near_parents() {
+        let mut rng = StdRng::seed_from_u64(42);
+        let mut near_parent_count = 0;
+        let n = 200;
+        for _ in 0..n {
+            let child = NsgaIISampler::sbx_crossover(4.0, 6.0, 0.0, 10.0, 20.0, &mut rng);
+            if child >= 3.0 && child <= 7.0 {
+                near_parent_count += 1;
+            }
+        }
+        // With eta_c=20 (high), most children should be near parents
+        assert!(
+            near_parent_count > n / 2,
+            "SBX with high eta should produce children near parents: {near_parent_count}/{n}"
+        );
+    }
+
+    #[test]
+    fn test_polynomial_mutation_bounded() {
+        let mut rng = StdRng::seed_from_u64(42);
+        for _ in 0..100 {
+            let mutated = NsgaIISampler::polynomial_mutation(5.0, 0.0, 10.0, 20.0, &mut rng);
+            assert!(
+                (0.0..=10.0).contains(&mutated),
+                "Polynomial mutation {mutated} out of [0, 10]"
+            );
+        }
+    }
+
+    #[test]
+    fn test_nsga2_uniform_crossover_backward_compat() {
+        let config = NsgaIIConfig {
+            n_startup_trials: 5,
+            population_size: 10,
+            crossover_type: CrossoverType::Uniform,
+            crossover_prob: 0.5,
+            ..Default::default()
+        };
+        let sampler = NsgaIISampler::new(config, 42);
+        let mut study =
+            Study::new_multi(vec![Direction::Minimize, Direction::Minimize]);
+
+        for i in 0..10 {
+            let mut trial = FrozenTrial::new(i);
+            trial.state = TrialState::Complete;
+            trial.value = Some(i as f64);
+            trial.values = Some(vec![i as f64, (10 - i) as f64]);
+            trial.params.insert("x".to_string(), i as f64);
+            study.add_trial(trial);
+        }
+
+        let trial = Trial::new(10);
+        let dist = Distribution::Float(crate::distributions::FloatDistribution::new(
+            0.0, 20.0, false, None,
+        ));
         let v = sampler.sample(&study, &trial, "x", &dist);
         assert!((0.0..=20.0).contains(&v));
     }
