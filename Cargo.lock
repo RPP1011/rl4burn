@@ -1926,6 +1926,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7a1e2f27636f116493b8b860f5546edb47c8d8f8ea73e1d2a20be88e28d1fea"
 
 [[package]]
+name = "deploy-cloud"
+version = "0.1.0"
+dependencies = [
+ "rl4burn",
+]
+
+[[package]]
 name = "deploy-policy"
 version = "0.1.0"
 dependencies = [
@@ -4879,6 +4886,7 @@ dependencies = [
  "burn",
  "rand 0.10.0",
  "rl4burn-algo",
+ "rl4burn-cloud",
  "rl4burn-collect",
  "rl4burn-core",
  "rl4burn-envs",
@@ -4894,6 +4902,13 @@ dependencies = [
  "rl4burn-collect",
  "rl4burn-core",
  "rl4burn-nn",
+]
+
+[[package]]
+name = "rl4burn-cloud"
+version = "0.2.0"
+dependencies = [
+ "thiserror 2.0.18",
 ]
 
 [[package]]
