@@ -21,6 +21,8 @@ members = [
     "examples/action-masking",
     "examples/lstm-policy",
     "examples/multi-agent",
+    "crates/rl4burn-tune",
+    "crates/rl4burn-tune-py",
 ]
 resolver = "2"
 
