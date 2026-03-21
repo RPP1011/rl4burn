@@ -7,9 +7,12 @@
 pub mod attention;
 pub mod autoregressive;
 pub mod clip;
+pub mod conv;
 pub mod dist;
 pub mod film;
 pub mod init;
+pub mod mlp;
+pub mod multi_encoder;
 pub mod policy;
 pub mod polyak;
 pub mod rnn;
@@ -32,6 +35,9 @@ pub use polyak::polyak_update;
 pub use rnn::{
     BlockGruCell, BlockGruCellConfig, GruCell, GruCellConfig, LstmCell, LstmCellConfig, LstmState,
 };
+pub use conv::{ConvDecoder, ConvDecoderConfig, ConvEncoder, ConvEncoderConfig};
+pub use mlp::{Mlp, MlpConfig, NormKind, RmsNorm, RmsNormConfig};
+pub use multi_encoder::{MultiDecoder, MultiDecoderConfig, MultiEncoder, MultiEncoderConfig};
 pub use rssm::{Rssm, RssmConfig, RssmState};
 pub use symlog::{TwohotEncoder, symexp, symlog};
 pub use vae::{BetaVae, BetaVaeConfig, VaeOutput};

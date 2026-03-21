@@ -1,4 +1,5 @@
 pub mod base;
+pub mod dreamer;
 pub mod imitation;
 pub mod multi_agent;
 pub mod planning;

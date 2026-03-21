@@ -66,6 +66,7 @@
 - [DreamerV3 Overview](./world-models/dreamer-overview.md)
 - [RSSM (Recurrent State-Space Model)](./world-models/rssm.md)
 - [Imagination Rollouts](./world-models/imagination.md)
+- [R2-Dreamer](./world-models/r2dreamer.md)
 
 # Game AI Infrastructure
 

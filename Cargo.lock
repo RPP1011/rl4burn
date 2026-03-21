@@ -2052,6 +2052,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dreamer"
+version = "0.1.0"
+dependencies = [
+ "burn",
+ "rand 0.10.0",
+ "rl4burn",
+]
+
+[[package]]
 name = "dyn-stack"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
