@@ -110,9 +110,9 @@ pub use rl4burn_algo::loss::policy::{policy_loss_continuous, policy_loss_discret
 pub use rl4burn_algo::loss::multi_head_value::{multi_head_gae, multi_head_value_loss, MultiHeadGaeResult, MultiHeadValueConfig};
 
 // Cloud deployment
-#[cfg(feature = "deploy")]
-pub mod deploy {
-    pub use rl4burn_core::deploy::*;
+#[cfg(feature = "cloud")]
+pub mod cloud {
+    pub use rl4burn_cloud::*;
 }
 
 // Rendering

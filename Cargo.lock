@@ -4814,6 +4814,7 @@ dependencies = [
  "burn",
  "rand 0.10.0",
  "rl4burn-algo",
+ "rl4burn-cloud",
  "rl4burn-collect",
  "rl4burn-core",
  "rl4burn-envs",
@@ -4829,6 +4830,13 @@ dependencies = [
  "rl4burn-collect",
  "rl4burn-core",
  "rl4burn-nn",
+]
+
+[[package]]
+name = "rl4burn-cloud"
+version = "0.2.0"
+dependencies = [
+ "thiserror 2.0.18",
 ]
 
 [[package]]

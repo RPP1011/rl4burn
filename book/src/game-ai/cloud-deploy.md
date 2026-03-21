@@ -1,6 +1,6 @@
 # Cloud GPU Deployment
 
-rl4burn provides a `deploy` module with provider-agnostic abstractions for
+rl4burn provides the `rl4burn-cloud` crate with provider-agnostic abstractions for
 launching training jobs on cloud GPU marketplaces. Currently supported:
 
 - **Vast.ai** — peer-to-peer GPU marketplace with competitive pricing
@@ -10,7 +10,7 @@ Enable the feature in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rl4burn = { git = "https://github.com/RPP1011/rl4burn", features = ["deploy"] }
+rl4burn = { git = "https://github.com/RPP1011/rl4burn", features = ["cloud"] }
 ```
 
 ## The `CloudProvider` Trait
@@ -18,7 +18,7 @@ rl4burn = { git = "https://github.com/RPP1011/rl4burn", features = ["deploy"] }
 All providers implement a common interface:
 
 ```rust,ignore
-use rl4burn::deploy::{CloudProvider, InstanceRequirements, GpuOffer, Instance};
+use rl4burn::cloud::{CloudProvider, InstanceRequirements, GpuOffer, Instance};
 
 pub trait CloudProvider {
     fn name(&self) -> &'static str;
@@ -35,7 +35,7 @@ values that you execute with your preferred client (reqwest, ureq, curl, etc.).
 ## Specifying Requirements
 
 ```rust,ignore
-use rl4burn::deploy::{InstanceRequirements, GpuType};
+use rl4burn::cloud::{InstanceRequirements, GpuType};
 
 let reqs = InstanceRequirements {
     min_gpu_ram_gib: 24.0,
@@ -53,7 +53,7 @@ let reqs = InstanceRequirements {
 ## Vast.ai
 
 ```rust,ignore
-use rl4burn::deploy::{VastAiProvider, CloudProvider};
+use rl4burn::cloud::{VastAiProvider, CloudProvider};
 
 let provider = VastAiProvider::new(std::env::var("VASTAI_API_KEY").unwrap());
 
@@ -79,7 +79,7 @@ provider.stop(&instance.instance_id)?;
 ## RunPod
 
 ```rust,ignore
-use rl4burn::deploy::{RunPodProvider, CloudProvider};
+use rl4burn::cloud::{RunPodProvider, CloudProvider};
 
 let provider = RunPodProvider::new(std::env::var("RUNPOD_API_KEY").unwrap());
 
@@ -124,7 +124,7 @@ The providers are designed to be dependency-free. Each method can either:
 Example with a custom HTTP function:
 
 ```rust,ignore
-fn my_http(req: &rl4burn::deploy::vastai::HttpRequest) -> Result<String, String> {
+fn my_http(req: &rl4burn::cloud::vastai::HttpRequest) -> Result<String, String> {
     // Use reqwest, ureq, curl, etc.
     todo!()
 }

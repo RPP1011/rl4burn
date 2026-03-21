@@ -12,7 +12,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use rl4burn::deploy::{VastAiProvider, CloudProvider, InstanceRequirements};
+//! use rl4burn_cloud::{VastAiProvider, CloudProvider, InstanceRequirements};
 //!
 //! let provider = VastAiProvider::new("your-api-key");
 //! let reqs = InstanceRequirements::default();
@@ -20,7 +20,7 @@
 //! println!("Cheapest: {} at ${}/hr", offers[0].gpu_type, offers[0].price_per_hour);
 //! ```
 
-use super::provider::*;
+use crate::provider::*;
 
 /// Vast.ai cloud GPU provider.
 ///
@@ -35,22 +35,6 @@ pub struct VastAiProvider {
     /// Optional HTTP executor. When `None`, methods return structured request
     /// descriptions that the caller can execute with any HTTP client.
     http_fn: Option<fn(&HttpRequest) -> Result<String, String>>,
-}
-
-/// An HTTP request that the provider needs executed.
-///
-/// This is returned by provider methods so callers can use their preferred
-/// HTTP client (reqwest, ureq, curl, etc.) without this crate depending on one.
-#[derive(Debug, Clone)]
-pub struct HttpRequest {
-    /// HTTP method (GET, POST, PUT, DELETE).
-    pub method: &'static str,
-    /// Full URL.
-    pub url: String,
-    /// Request headers.
-    pub headers: Vec<(&'static str, String)>,
-    /// Optional JSON body.
-    pub body: Option<String>,
 }
 
 impl VastAiProvider {
@@ -202,8 +186,6 @@ impl CloudProvider for VastAiProvider {
         let req = self.search_request(reqs);
         let body = self.exec(&req)?;
 
-        // Minimal JSON parsing — in production, users would use serde_json.
-        // We parse the "offers" array from the Vast.ai response format.
         parse_vastai_offers(&body)
     }
 
@@ -252,11 +234,8 @@ fn vastai_gpu_name(gpu: &GpuType) -> &'static str {
 /// Parse Vast.ai JSON offer list. This is a minimal parser — for production
 /// use, bring in `serde_json`.
 fn parse_vastai_offers(json: &str) -> CloudResult<Vec<GpuOffer>> {
-    // Vast.ai returns {"offers": [{...}, ...]}
-    // We do basic string extraction for the key fields.
     let mut offers = Vec::new();
 
-    // Split on offer boundaries (each offer is a JSON object in the array)
     for chunk in json.split("\"id\"").skip(1) {
         let id = extract_number(chunk).unwrap_or_default();
         let gpu_name = extract_string_field(chunk, "gpu_name").unwrap_or_default();

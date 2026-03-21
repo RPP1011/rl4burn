@@ -16,6 +16,7 @@ rl4burn-nn = { path = "../crates/rl4burn-nn" }
 rl4burn-collect = { path = "../crates/rl4burn-collect" }
 rl4burn-algo = { path = "../crates/rl4burn-algo" }
 rl4burn-envs = { path = "../crates/rl4burn-envs" }
+rl4burn-cloud = { path = "../crates/rl4burn-cloud", optional = true }
 
 [dev-dependencies]
 burn = { workspace = true, features = ["ndarray", "autodiff"] }
@@ -27,4 +28,4 @@ ndarray = ["rl4burn-core/ndarray"]
 tensorboard = ["rl4burn-core/tensorboard"]
 json-log = ["rl4burn-core/json-log"]
 video = ["rl4burn-core/video"]
-deploy = ["rl4burn-core/deploy"]
+cloud = ["rl4burn-cloud"]

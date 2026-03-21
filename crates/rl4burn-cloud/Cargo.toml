@@ -1,0 +1,10 @@
+[package]
+name = "rl4burn-cloud"
+version.workspace = true
+edition.workspace = true
+description = "Cloud GPU provider integrations for rl4burn (Vast.ai, RunPod)"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }

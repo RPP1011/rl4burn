@@ -20,7 +20,7 @@
 //! Without real API keys, the example demonstrates request construction and
 //! shows what the provider calls would look like.
 
-use rl4burn::deploy::{
+use rl4burn::cloud::{
     CloudProvider, GpuType, InstanceRequirements, RunPodProvider, VastAiProvider,
 };
 
@@ -122,7 +122,7 @@ fn main() {
     eprintln!("--- Example request construction (Vast.ai) ---");
 
     // Construct a mock offer to show what a launch request looks like
-    let mock_offer = rl4burn::deploy::GpuOffer {
+    let mock_offer = rl4burn::cloud::GpuOffer {
         offer_id: "123456".into(),
         gpu_type: GpuType::Rtx4090,
         num_gpus: 1,

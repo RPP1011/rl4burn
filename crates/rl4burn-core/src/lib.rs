@@ -8,6 +8,3 @@
 pub mod env;
 pub mod error;
 pub mod log;
-
-#[cfg(feature = "deploy")]
-pub mod deploy;

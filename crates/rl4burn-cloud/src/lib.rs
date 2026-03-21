@@ -1,16 +1,14 @@
 //! Cloud GPU provider abstractions for deploying rl4burn training jobs.
 //!
-//! This module provides a [`CloudProvider`] trait and implementations for
+//! This crate provides a [`CloudProvider`] trait and implementations for
 //! popular GPU marketplaces (Vast.ai, RunPod). It handles instance lifecycle
 //! (search, launch, status, stop) so you can script cloud training runs.
 //!
-//! # Feature gate
-//!
-//! All deploy functionality is behind the `deploy` feature flag:
+//! # Usage
 //!
 //! ```toml
 //! [dependencies]
-//! rl4burn = { git = "...", features = ["deploy"] }
+//! rl4burn-cloud = { git = "..." }
 //! ```
 
 mod provider;

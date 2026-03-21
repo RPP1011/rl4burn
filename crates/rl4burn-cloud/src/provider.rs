@@ -4,6 +4,26 @@ use std::collections::HashMap;
 use std::fmt;
 
 // ---------------------------------------------------------------------------
+// HTTP request (shared by all providers)
+// ---------------------------------------------------------------------------
+
+/// An HTTP request that the provider needs executed.
+///
+/// This is returned by provider methods so callers can use their preferred
+/// HTTP client (reqwest, ureq, curl, etc.) without this crate depending on one.
+#[derive(Debug, Clone)]
+pub struct HttpRequest {
+    /// HTTP method (GET, POST, PUT, DELETE).
+    pub method: &'static str,
+    /// Full URL.
+    pub url: String,
+    /// Request headers.
+    pub headers: Vec<(&'static str, String)>,
+    /// Optional JSON body.
+    pub body: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // GPU type
 // ---------------------------------------------------------------------------
 
@@ -210,7 +230,7 @@ pub type CloudResult<T> = std::result::Result<T, CloudError>;
 /// # Example
 ///
 /// ```rust,ignore
-/// use rl4burn::deploy::{CloudProvider, InstanceRequirements, VastAiProvider};
+/// use rl4burn_cloud::{CloudProvider, InstanceRequirements, VastAiProvider};
 ///
 /// let provider = VastAiProvider::new("your-api-key");
 /// let reqs = InstanceRequirements {

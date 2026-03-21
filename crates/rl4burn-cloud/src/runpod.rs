@@ -12,7 +12,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use rl4burn::deploy::{RunPodProvider, CloudProvider, InstanceRequirements, GpuType};
+//! use rl4burn_cloud::{RunPodProvider, CloudProvider, InstanceRequirements, GpuType};
 //!
 //! let provider = RunPodProvider::new("your-api-key");
 //! let reqs = InstanceRequirements {
@@ -25,8 +25,7 @@
 //! let instance = provider.launch(&offers[0])?;
 //! ```
 
-use super::provider::*;
-use super::vastai::HttpRequest;
+use crate::provider::*;
 
 /// RunPod cloud GPU provider.
 ///
@@ -341,7 +340,6 @@ fn parse_runpod_gpu_types(json: &str, reqs: &InstanceRequirements) -> CloudResul
 }
 
 fn parse_runpod_pod(json: &str) -> CloudResult<Instance> {
-    // Look for pod data in the response
     let id = extract_string_field(json, "id").unwrap_or_default();
     let status_str = extract_string_field(json, "desiredStatus").unwrap_or_default();
 
@@ -353,7 +351,6 @@ fn parse_runpod_pod(json: &str) -> CloudResult<Instance> {
         _ => InstanceStatus::Unknown,
     };
 
-    // Try to extract SSH connection info from runtime.ports
     let ip = extract_string_field(json, "ip");
     let public_port = extract_number_field(json, "publicPort").map(|p| p as u16);
 

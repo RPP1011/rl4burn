@@ -5,6 +5,7 @@ members = [
     "crates/rl4burn-collect",
     "crates/rl4burn-algo",
     "crates/rl4burn-envs",
+    "crates/rl4burn-cloud",
     "rl4burn",
     "examples/quickstart",
     "examples/config-driven",
