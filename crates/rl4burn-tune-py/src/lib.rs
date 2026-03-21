@@ -281,6 +281,8 @@ enum SamplerKind {
     CmaEs(rl4burn_tune::CmaEsSampler),
     NsgaII(rl4burn_tune::NsgaIISampler),
     Gp(rl4burn_tune::GpSampler),
+    BruteForce(rl4burn_tune::BruteForceSampler),
+    Qmc(rl4burn_tune::QmcSampler),
 }
 
 impl PySampler {
@@ -291,6 +293,8 @@ impl PySampler {
             SamplerKind::CmaEs(s) => s,
             SamplerKind::NsgaII(s) => s,
             SamplerKind::Gp(s) => s,
+            SamplerKind::BruteForce(s) => s,
+            SamplerKind::Qmc(s) => s,
         }
     }
 }
@@ -365,6 +369,25 @@ fn gp_sampler(seed: u64, n_startup_trials: usize, n_candidates: usize) -> PySamp
     };
     PySampler {
         inner: SamplerKind::Gp(rl4burn_tune::GpSampler::new(config, seed)),
+    }
+}
+
+/// Create a brute-force sampler that exhaustively enumerates parameter values.
+#[pyfunction]
+#[pyo3(signature = (n_points = 10))]
+fn brute_force_sampler(n_points: usize) -> PySampler {
+    PySampler {
+        inner: SamplerKind::BruteForce(rl4burn_tune::BruteForceSampler::new(n_points)),
+    }
+}
+
+/// Create a Quasi-Monte Carlo sampler using Halton sequences.
+#[pyfunction]
+#[pyo3(signature = (seed, skip = 0))]
+fn qmc_sampler(seed: u64, skip: usize) -> PySampler {
+    let config = rl4burn_tune::QmcConfig { skip };
+    PySampler {
+        inner: SamplerKind::Qmc(rl4burn_tune::QmcSampler::new(config, seed)),
     }
 }
 
@@ -814,6 +837,8 @@ fn rl4burn_tune_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cmaes_sampler, m)?)?;
     m.add_function(wrap_pyfunction!(nsga2_sampler, m)?)?;
     m.add_function(wrap_pyfunction!(gp_sampler, m)?)?;
+    m.add_function(wrap_pyfunction!(brute_force_sampler, m)?)?;
+    m.add_function(wrap_pyfunction!(qmc_sampler, m)?)?;
 
     // Pruner constructors
     m.add_function(wrap_pyfunction!(nop_pruner, m)?)?;

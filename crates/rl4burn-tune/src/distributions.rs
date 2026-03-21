@@ -43,6 +43,64 @@ impl Distribution {
             Distribution::Categorical(d) => d.single(),
         }
     }
+
+    /// Check whether two distributions are compatible (same type with
+    /// overlapping support). Used to verify that a retried parameter's
+    /// distribution is compatible with prior trials.
+    pub fn is_compatible(&self, other: &Distribution) -> bool {
+        match (self, other) {
+            (Distribution::Float(a), Distribution::Float(b)) => {
+                a.log == b.log && a.step == b.step && a.low <= b.high && b.low <= a.high
+            }
+            (Distribution::Int(a), Distribution::Int(b)) => {
+                a.log == b.log && a.step == b.step && a.low <= b.high && b.low <= a.high
+            }
+            (Distribution::Categorical(a), Distribution::Categorical(b)) => {
+                a.choices.len() == b.choices.len()
+            }
+            _ => false,
+        }
+    }
+
+    /// Compute the intersection of two compatible distributions.
+    /// Returns None if distributions are incompatible.
+    pub fn intersection(&self, other: &Distribution) -> Option<Distribution> {
+        if !self.is_compatible(other) {
+            return None;
+        }
+        match (self, other) {
+            (Distribution::Float(a), Distribution::Float(b)) => {
+                let low = a.low.max(b.low);
+                let high = a.high.min(b.high);
+                if low >= high {
+                    return None;
+                }
+                Some(Distribution::Float(FloatDistribution {
+                    low,
+                    high,
+                    log: a.log,
+                    step: a.step,
+                }))
+            }
+            (Distribution::Int(a), Distribution::Int(b)) => {
+                let low = a.low.max(b.low);
+                let high = a.high.min(b.high);
+                if low >= high {
+                    return None;
+                }
+                Some(Distribution::Int(IntDistribution {
+                    low,
+                    high,
+                    log: a.log,
+                    step: a.step,
+                }))
+            }
+            (Distribution::Categorical(a), Distribution::Categorical(_b)) => {
+                Some(Distribution::Categorical(a.clone()))
+            }
+            _ => None,
+        }
+    }
 }
 
 /// A named map from parameter names to distributions.

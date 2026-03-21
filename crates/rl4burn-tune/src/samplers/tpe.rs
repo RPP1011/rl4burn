@@ -601,6 +601,7 @@ impl TpeSampler {
 
     /// Compute a "lie" value for running trials based on completed trial values.
     /// Uses the worst completed value (pessimistic constant liar).
+    #[allow(dead_code)]
     fn compute_lie_value(&self, study: &Study) -> f64 {
         let completed_values: Vec<f64> = study
             .trials()
@@ -632,6 +633,7 @@ impl TpeSampler {
 
     /// Get effective trials for TPE, including running trials with imputed values
     /// when constant_liar is enabled.
+    #[allow(dead_code)]
     fn get_effective_trials<'a>(
         &self,
         study: &'a Study,
@@ -987,7 +989,7 @@ impl TpeSampler {
     fn sample_multivariate(
         &self,
         study: &Study,
-        trial_number: usize,
+        _trial_number: usize,
     ) -> std::collections::HashMap<String, f64> {
         // Collect all parameter names and distributions from completed trials
         let completed: Vec<&crate::trial::FrozenTrial> = study

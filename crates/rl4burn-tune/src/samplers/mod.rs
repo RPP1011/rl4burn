@@ -1,14 +1,18 @@
+mod brute_force;
 mod cmaes;
 mod gp;
 mod grid;
 mod nsga2;
+mod qmc;
 mod random;
 mod tpe;
 
+pub use brute_force::BruteForceSampler;
 pub use cmaes::{CmaEsConfig, CmaEsSampler};
 pub use gp::{GpConfig, GpSampler};
 pub use grid::GridSampler;
 pub use nsga2::{CrossoverType, NsgaIIConfig, NsgaIISampler};
+pub use qmc::{QmcConfig, QmcSampler};
 pub use random::RandomSampler;
 pub use tpe::{
     calculate_order, default_gamma, default_weights, gaussian_log_pdf,

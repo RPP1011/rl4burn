@@ -178,7 +178,65 @@ impl Study {
             return self.best_trial().into_iter().collect();
         }
 
-        // Multi-objective: get values and do non-dominated sort
+        // Check if any trials have constraints
+        let has_constraints = completed.iter().any(|t| t.constraint_values.is_some());
+
+        if has_constraints {
+            // Constrained multi-objective: feasible dominates infeasible,
+            // among infeasible prefer lower total violation
+            let feasible: Vec<usize> = completed
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| t.is_feasible())
+                .map(|(i, _)| i)
+                .collect();
+
+            if !feasible.is_empty() {
+                // Non-dominated sort among feasible only
+                let feasible_values: Vec<Vec<f64>> = feasible
+                    .iter()
+                    .map(|&i| {
+                        completed[i]
+                            .values
+                            .clone()
+                            .unwrap_or_else(|| {
+                                completed[i].value.map(|v| vec![v]).unwrap_or_default()
+                            })
+                    })
+                    .collect();
+
+                let fronts = crate::multi_objective::non_dominated_sort(
+                    &feasible_values,
+                    &self.directions,
+                );
+
+                if fronts.is_empty() {
+                    return vec![];
+                }
+
+                return fronts[0]
+                    .iter()
+                    .map(|&fi| completed[feasible[fi]])
+                    .collect();
+            }
+            // All infeasible: return least-violated
+            let mut by_violation: Vec<(usize, f64)> = completed
+                .iter()
+                .enumerate()
+                .map(|(i, t)| (i, t.total_violation()))
+                .collect();
+            by_violation.sort_by(|a, b| {
+                a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let min_violation = by_violation[0].1;
+            return by_violation
+                .iter()
+                .filter(|(_, v)| (*v - min_violation).abs() < 1e-12)
+                .map(|(i, _)| completed[*i])
+                .collect();
+        }
+
+        // Unconstrained multi-objective: standard non-dominated sort
         let values: Vec<Vec<f64>> = completed
             .iter()
             .map(|t| {

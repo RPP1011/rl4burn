@@ -3,8 +3,10 @@
 //! Provides evaluators that estimate the importance of each hyperparameter
 //! in determining the objective value.
 
+mod fanova;
 mod ped_anova;
 
+pub use fanova::FanovaImportanceEvaluator;
 pub use ped_anova::PedAnovaImportanceEvaluator;
 
 use std::collections::HashMap;

@@ -275,6 +275,7 @@ impl CmaEsSampler {
     }
 
     /// Transform a raw parameter value to [0,1] internal space based on distribution.
+    #[allow(dead_code)]
     fn to_internal(value: f64, distribution: &Distribution) -> f64 {
         match distribution {
             Distribution::Float(d) => transform_to_internal(value, d),

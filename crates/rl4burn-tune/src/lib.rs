@@ -20,11 +20,13 @@ pub use pruners::{
     HyperbandPruner, MedianPruner, NopPruner, PatientPruner, PercentilePruner, Pruner,
     SuccessiveHalvingPruner, ThresholdPruner, WilcoxonPruner,
 };
+pub use importance::{FanovaImportanceEvaluator, ImportanceEvaluator, PedAnovaImportanceEvaluator};
 pub use samplers::{
     calculate_order, default_gamma, default_weights, gaussian_log_pdf, hyperopt_default_gamma,
-    CategoricalParzenEstimator, CmaEsConfig, CmaEsSampler, CrossoverType, GammaStrategy,
-    GpConfig, GpSampler, GridSampler, NsgaIIConfig, NsgaIISampler, ParzenEstimator,
-    RandomSampler, Sampler, TpeSampler, TpeSamplerConfig,
+    BruteForceSampler, CategoricalParzenEstimator, CmaEsConfig, CmaEsSampler, CrossoverType,
+    GammaStrategy, GpConfig, GpSampler, GridSampler, NsgaIIConfig, NsgaIISampler,
+    ParzenEstimator, QmcConfig, QmcSampler, RandomSampler, Sampler, TpeSampler,
+    TpeSamplerConfig,
 };
 pub use study::{Callback, Direction, Study, StudyConfig};
 pub use trial::{FrozenTrial, Trial, TrialState};
