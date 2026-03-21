@@ -4,8 +4,8 @@
 //! (RMSNorm or LayerNorm) and SiLU activation.  Used throughout
 //! R2-Dreamer for prediction heads, encoders, and actor/critic networks.
 //!
-//! Reference: Nauman & Straffelini, "R2-Dreamer: Redundancy Reduction for
-//! Computationally Efficient World Models" (ICLR 2026).
+//! Reference: Morihira, Nahar, Bharadwaj, Kato, Hayashi & Harada, "R2-Dreamer:
+//! Redundancy-Reduced World Models without Decoders or Augmentation" (ICLR 2026).
 
 use burn::nn::{LayerNorm, LayerNormConfig, Linear, LinearConfig};
 use burn::prelude::*;

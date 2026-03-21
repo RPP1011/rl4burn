@@ -9,8 +9,8 @@
 //! 3. **DreamerPro** (`dreamerpro_loss`) — prototype-based with Sinkhorn assignment.
 //! 4. **Decoder** (`decoder_loss`) — standard MSE reconstruction (DreamerV3 baseline).
 //!
-//! Reference: Nauman & Straffelini, "R2-Dreamer: Redundancy Reduction for
-//! Computationally Efficient World Models" (ICLR 2026).
+//! Reference: Morihira, Nahar, Bharadwaj, Kato, Hayashi & Harada, "R2-Dreamer:
+//! Redundancy-Reduced World Models without Decoders or Augmentation" (ICLR 2026).
 
 use burn::prelude::*;
 
@@ -98,7 +98,7 @@ pub fn barlow_twins_loss<B: Backend>(
 }
 
 /// Zero-mean, unit-std normalization along the batch dimension.
-fn batch_normalize<B: Backend>(x: Tensor<B, 2>) -> Tensor<B, 2> {
+pub fn batch_normalize<B: Backend>(x: Tensor<B, 2>) -> Tensor<B, 2> {
     let mean = x.clone().mean_dim(0); // [1, dim]
     let centered = x - mean;
     let std = centered.clone().powf_scalar(2.0).mean_dim(0).sqrt() + 1e-6;

@@ -15,3 +15,4 @@ rl4burn-collect = { path = "../rl4burn-collect" }
 
 [dev-dependencies]
 burn = { workspace = true, features = ["ndarray", "autodiff"] }
+serde_json = "1"
