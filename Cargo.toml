@@ -23,6 +23,8 @@ members = [
     "examples/lstm-policy",
     "examples/multi-agent",
     "examples/deploy-cloud",
+    "crates/rl4burn-tune",
+    "crates/rl4burn-tune-py",
 ]
 resolver = "2"
 
