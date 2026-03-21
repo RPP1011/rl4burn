@@ -570,6 +570,9 @@ pub struct TpeSampler {
     config: TpeSamplerConfig,
     random_sampler: super::RandomSampler,
     rng: Mutex<StdRng>,
+    /// Cached multivariate samples: trial_number -> (param_name -> value).
+    /// Used when `multivariate=true` to ensure all parameters are sampled jointly.
+    multivariate_cache: Mutex<std::collections::HashMap<usize, std::collections::HashMap<String, f64>>>,
 }
 
 impl TpeSampler {
@@ -579,6 +582,7 @@ impl TpeSampler {
             config,
             random_sampler: super::RandomSampler::new(seed),
             rng: Mutex::new(StdRng::seed_from_u64(seed.wrapping_add(1))),
+            multivariate_cache: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -680,6 +684,61 @@ impl TpeSampler {
         (good, bad)
     }
 
+    /// Split completed trials into good/bad for multi-objective studies using
+    /// Pareto dominance (MOTPE). Fills the "good" group front-by-front until
+    /// gamma(n) trials are reached.
+    fn split_trials_multi(
+        &self,
+        completed: &[&crate::trial::FrozenTrial],
+        directions: &[crate::study::Direction],
+    ) -> (Vec<usize>, Vec<usize>) {
+        let n = completed.len();
+        let n_good = self.gamma(n);
+
+        // Get objective values
+        let values: Vec<Vec<f64>> = completed
+            .iter()
+            .map(|t| {
+                t.values
+                    .clone()
+                    .unwrap_or_else(|| t.value.map(|v| vec![v]).unwrap_or_default())
+            })
+            .collect();
+
+        let fronts = crate::multi_objective::non_dominated_sort(&values, directions);
+
+        let mut good = Vec::new();
+        for front in &fronts {
+            if good.len() >= n_good {
+                break;
+            }
+            for &idx in front {
+                if good.len() >= n_good {
+                    break;
+                }
+                good.push(idx);
+            }
+        }
+
+        let good_set: std::collections::HashSet<usize> = good.iter().copied().collect();
+        let bad: Vec<usize> = (0..n).filter(|i| !good_set.contains(i)).collect();
+
+        (good, bad)
+    }
+
+    /// Choose the right split strategy based on single/multi-objective.
+    fn split_trials_auto(
+        &self,
+        study: &Study,
+        completed: &[&crate::trial::FrozenTrial],
+    ) -> (Vec<usize>, Vec<usize>) {
+        if study.is_multi_objective() {
+            self.split_trials_multi(completed, study.directions())
+        } else {
+            self.split_trials(study, completed)
+        }
+    }
+
     /// Sample a float parameter using TPE.
     fn sample_float(
         &self,
@@ -703,7 +762,7 @@ impl TpeSampler {
             );
         }
 
-        let (good_indices, bad_indices) = self.split_trials(study, &completed);
+        let (good_indices, bad_indices) = self.split_trials_auto(study, &completed);
 
         // Extract parameter values in original space
         let good_values: Vec<f64> = good_indices
@@ -794,7 +853,7 @@ impl TpeSampler {
             );
         }
 
-        let (good_indices, bad_indices) = self.split_trials(study, &completed);
+        let (good_indices, bad_indices) = self.split_trials_auto(study, &completed);
 
         // Extract parameter values in original space
         let good_values: Vec<f64> = good_indices
@@ -878,7 +937,7 @@ impl TpeSampler {
             );
         }
 
-        let (good_indices, bad_indices) = self.split_trials(study, &completed);
+        let (good_indices, bad_indices) = self.split_trials_auto(study, &completed);
 
         let good_cats: Vec<usize> = good_indices
             .iter()
@@ -919,6 +978,151 @@ impl TpeSampler {
 
         best_cat as f64
     }
+
+    /// Sample all parameters jointly for multivariate TPE.
+    ///
+    /// Builds per-parameter Parzen estimators for good/bad groups, then samples
+    /// `n_ei_candidates` joint candidates from the product of good estimators.
+    /// Picks the candidate maximizing the sum of log(l(x_i)) - log(g(x_i)).
+    fn sample_multivariate(
+        &self,
+        study: &Study,
+        trial_number: usize,
+    ) -> std::collections::HashMap<String, f64> {
+        // Collect all parameter names and distributions from completed trials
+        let completed: Vec<&crate::trial::FrozenTrial> = study
+            .trials()
+            .iter()
+            .filter(|t| t.state == TrialState::Complete)
+            .collect();
+
+        if completed.is_empty() {
+            return std::collections::HashMap::new();
+        }
+
+        // Find all parameter names (union across all completed trials)
+        let mut param_names: Vec<String> = completed
+            .last()
+            .unwrap()
+            .params
+            .keys()
+            .cloned()
+            .collect();
+        param_names.sort();
+
+        let n = completed.len();
+        if n < self.config.n_startup_trials {
+            return std::collections::HashMap::new();
+        }
+
+        let (good_indices, bad_indices) = self.split_trials_auto(study, &completed);
+
+        let prior_weight = if self.config.consider_prior {
+            self.config.prior_weight
+        } else {
+            0.0
+        };
+
+        // Build per-parameter estimators
+        let mut l_estimators: Vec<ParzenEstimator> = Vec::new();
+        let mut g_estimators: Vec<ParzenEstimator> = Vec::new();
+        let mut param_lows: Vec<f64> = Vec::new();
+        let mut param_highs: Vec<f64> = Vec::new();
+
+        for name in &param_names {
+            let good_values: Vec<f64> = good_indices
+                .iter()
+                .filter_map(|&i| completed[i].params.get(name).copied())
+                .collect();
+            let bad_values: Vec<f64> = bad_indices
+                .iter()
+                .filter_map(|&i| completed[i].params.get(name).copied())
+                .collect();
+
+            if good_values.is_empty() || bad_values.is_empty() {
+                continue;
+            }
+
+            // Infer bounds from data
+            let all_values: Vec<f64> = completed
+                .iter()
+                .filter_map(|t| t.params.get(name).copied())
+                .collect();
+            let low = all_values.iter().copied().fold(f64::INFINITY, f64::min);
+            let high = all_values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            let range = (high - low).max(1e-10);
+            let low = low - 0.1 * range;
+            let high = high + 0.1 * range;
+
+            let good_w = default_weights(good_values.len());
+            let bad_w = default_weights(bad_values.len());
+
+            l_estimators.push(ParzenEstimator::new(
+                &good_values, low, high, prior_weight,
+                self.config.consider_magic_clip, self.config.consider_endpoints,
+                &good_w,
+            ));
+            g_estimators.push(ParzenEstimator::new(
+                &bad_values, low, high, prior_weight,
+                self.config.consider_magic_clip, self.config.consider_endpoints,
+                &bad_w,
+            ));
+            param_lows.push(low);
+            param_highs.push(high);
+        }
+
+        if l_estimators.is_empty() {
+            return std::collections::HashMap::new();
+        }
+
+        // Sample n_ei_candidates joint candidates from l(x), pick best joint EI
+        let mut rng = self.rng.lock().unwrap();
+        let n_params = l_estimators.len();
+        let mut best_candidate: Vec<f64> = vec![0.0; n_params];
+        let mut best_ei = f64::NEG_INFINITY;
+
+        for _ in 0..self.config.n_ei_candidates {
+            let mut candidate = Vec::with_capacity(n_params);
+            let mut joint_ei = 0.0;
+
+            for j in 0..n_params {
+                let x = l_estimators[j].sample(&mut *rng);
+                let l_log = l_estimators[j].log_pdf(x);
+                let g_log = g_estimators[j].log_pdf(x);
+                joint_ei += l_log - g_log;
+                candidate.push(x);
+            }
+
+            if joint_ei > best_ei {
+                best_ei = joint_ei;
+                best_candidate = candidate;
+            }
+        }
+
+        // Build result map
+        let mut result = std::collections::HashMap::new();
+        let valid_names: Vec<&String> = param_names.iter()
+            .filter(|name| {
+                let good_values: Vec<f64> = good_indices
+                    .iter()
+                    .filter_map(|&i| completed[i].params.get(*name).copied())
+                    .collect();
+                let bad_values: Vec<f64> = bad_indices
+                    .iter()
+                    .filter_map(|&i| completed[i].params.get(*name).copied())
+                    .collect();
+                !good_values.is_empty() && !bad_values.is_empty()
+            })
+            .collect();
+
+        for (j, name) in valid_names.iter().enumerate() {
+            if j < best_candidate.len() {
+                result.insert((*name).clone(), best_candidate[j]);
+            }
+        }
+
+        result
+    }
 }
 
 impl Sampler for TpeSampler {
@@ -929,6 +1133,37 @@ impl Sampler for TpeSampler {
         param_name: &str,
         distribution: &Distribution,
     ) -> f64 {
+        // Multivariate mode: sample all params jointly on first request, cache rest
+        if self.config.multivariate {
+            // Check cache first
+            {
+                let cache = self.multivariate_cache.lock().unwrap();
+                if let Some(trial_params) = cache.get(&_trial.number) {
+                    if let Some(&value) = trial_params.get(param_name) {
+                        return value;
+                    }
+                }
+            }
+
+            // Not cached — try to do joint sampling
+            let completed_count = study
+                .trials()
+                .iter()
+                .filter(|t| t.state == TrialState::Complete)
+                .count();
+
+            if completed_count >= self.config.n_startup_trials {
+                let joint_sample = self.sample_multivariate(study, _trial.number);
+                if let Some(&value) = joint_sample.get(param_name) {
+                    let mut cache = self.multivariate_cache.lock().unwrap();
+                    cache.insert(_trial.number, joint_sample);
+                    return value;
+                }
+            }
+
+            // Fall through to univariate if joint sampling didn't produce this param
+        }
+
         match distribution {
             Distribution::Float(d) => self.sample_float(study, d, param_name),
             Distribution::Int(d) => self.sample_int(study, d, param_name),

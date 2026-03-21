@@ -34,6 +34,10 @@ pub struct FrozenTrial {
     pub user_attrs: HashMap<String, String>,
     /// System-defined attributes used internally by samplers/pruners.
     pub system_attrs: HashMap<String, String>,
+    /// Constraint values for constrained optimization.
+    /// Negative values indicate feasible constraints, positive values indicate violations.
+    /// A trial is feasible if all constraint values are <= 0.
+    pub constraint_values: Option<Vec<f64>>,
 }
 
 impl FrozenTrial {
@@ -47,6 +51,24 @@ impl FrozenTrial {
             intermediate_values: HashMap::new(),
             user_attrs: HashMap::new(),
             system_attrs: HashMap::new(),
+            constraint_values: None,
+        }
+    }
+
+    /// Check whether this trial is feasible (all constraints satisfied).
+    /// Returns true if no constraints are set.
+    pub fn is_feasible(&self) -> bool {
+        match &self.constraint_values {
+            None => true,
+            Some(cv) => cv.iter().all(|&v| v <= 0.0),
+        }
+    }
+
+    /// Total constraint violation (sum of positive constraint values).
+    pub fn total_violation(&self) -> f64 {
+        match &self.constraint_values {
+            None => 0.0,
+            Some(cv) => cv.iter().map(|&v| v.max(0.0)).sum(),
         }
     }
 
@@ -106,6 +128,8 @@ pub struct Trial {
     pub user_attrs: HashMap<String, String>,
     /// System-defined attributes used internally by samplers/pruners.
     pub system_attrs: HashMap<String, String>,
+    /// Constraint values for constrained optimization.
+    pub constraint_values: Option<Vec<f64>>,
 }
 
 impl Trial {
@@ -117,7 +141,14 @@ impl Trial {
             pruned: false,
             user_attrs: HashMap::new(),
             system_attrs: HashMap::new(),
+            constraint_values: None,
         }
+    }
+
+    /// Set constraint values for this trial.
+    /// Negative values indicate feasible constraints, positive values indicate violations.
+    pub fn set_constraints(&mut self, values: Vec<f64>) {
+        self.constraint_values = Some(values);
     }
 
     /// Set a user-defined attribute.
@@ -225,6 +256,7 @@ impl Trial {
             intermediate_values: self.intermediate_values.clone(),
             user_attrs: self.user_attrs.clone(),
             system_attrs: self.system_attrs.clone(),
+            constraint_values: self.constraint_values.clone(),
         };
 
         if pruner.prune(study, &frozen) {

@@ -118,21 +118,45 @@ impl Study {
     /// Panics if the study has multiple directions.
     pub fn best_trial(&self) -> Option<&FrozenTrial> {
         let dir = self.direction(); // panics if multi-objective
-        self.trials
+        let completed: Vec<&FrozenTrial> = self
+            .trials
             .iter()
             .filter(|t| t.state == TrialState::Complete && t.value.is_some())
-            .min_by(|a, b| {
-                let va = a.value.unwrap();
-                let vb = b.value.unwrap();
-                match dir {
-                    Direction::Minimize => {
-                        va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
+            .collect();
+
+        if completed.is_empty() {
+            return None;
+        }
+
+        // Prefer feasible trials; if none feasible, pick least-violated
+        let feasible: Vec<&&FrozenTrial> = completed.iter().filter(|t| t.is_feasible()).collect();
+
+        if !feasible.is_empty() {
+            feasible
+                .into_iter()
+                .min_by(|a, b| {
+                    let va = a.value.unwrap();
+                    let vb = b.value.unwrap();
+                    match dir {
+                        Direction::Minimize => {
+                            va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
+                        }
+                        Direction::Maximize => {
+                            vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
+                        }
                     }
-                    Direction::Maximize => {
-                        vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
-                    }
-                }
-            })
+                })
+                .copied()
+        } else {
+            // No feasible trials: pick least total violation
+            completed
+                .into_iter()
+                .min_by(|a, b| {
+                    a.total_violation()
+                        .partial_cmp(&b.total_violation())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+        }
     }
 
     /// Get the Pareto-optimal trials for multi-objective studies.
@@ -227,10 +251,33 @@ impl Study {
         frozen.intermediate_values = trial.intermediate_values;
         frozen.user_attrs = trial.user_attrs;
         frozen.system_attrs = trial.system_attrs;
+        frozen.constraint_values = trial.constraint_values;
         frozen.state = state;
         frozen.value = value;
         if let Err(msg) = frozen.validate() {
             panic!("Invalid trial in tell(): {msg}");
+        }
+        self.trials.push(frozen);
+    }
+
+    /// Record a trial result with multiple objective values (for multi-objective studies).
+    pub fn tell_multi(
+        &mut self,
+        trial: crate::trial::Trial,
+        state: TrialState,
+        values: Vec<f64>,
+    ) {
+        let mut frozen = FrozenTrial::new(trial.number);
+        frozen.params = trial.params;
+        frozen.intermediate_values = trial.intermediate_values;
+        frozen.user_attrs = trial.user_attrs;
+        frozen.system_attrs = trial.system_attrs;
+        frozen.constraint_values = trial.constraint_values;
+        frozen.state = state;
+        frozen.value = values.first().copied();
+        frozen.values = Some(values);
+        if let Err(msg) = frozen.validate() {
+            panic!("Invalid trial in tell_multi(): {msg}");
         }
         self.trials.push(frozen);
     }
@@ -282,6 +329,7 @@ impl Study {
             frozen.intermediate_values = trial.intermediate_values.clone();
             frozen.user_attrs = trial.user_attrs.clone();
             frozen.system_attrs = trial.system_attrs.clone();
+            frozen.constraint_values = trial.constraint_values.clone();
 
             // Check if the trial was pruned mid-objective
             if trial.pruned {
@@ -363,6 +411,7 @@ impl Study {
             frozen.intermediate_values = trial.intermediate_values.clone();
             frozen.user_attrs = trial.user_attrs.clone();
             frozen.system_attrs = trial.system_attrs.clone();
+            frozen.constraint_values = trial.constraint_values.clone();
 
             match result {
                 Ok(value) => {
