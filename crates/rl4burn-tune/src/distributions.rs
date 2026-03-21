@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 /// A float hyperparameter distribution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FloatDistribution {
     pub low: f64,
     pub high: f64,
@@ -10,7 +12,7 @@ pub struct FloatDistribution {
 }
 
 /// An integer hyperparameter distribution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntDistribution {
     pub low: i64,
     pub high: i64,
@@ -19,17 +21,28 @@ pub struct IntDistribution {
 }
 
 /// A categorical hyperparameter distribution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CategoricalDistribution {
     pub choices: Vec<String>,
 }
 
 /// Any hyperparameter distribution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Distribution {
     Float(FloatDistribution),
     Int(IntDistribution),
     Categorical(CategoricalDistribution),
+}
+
+impl Distribution {
+    /// Check if this distribution has only one possible value.
+    pub fn single(&self) -> bool {
+        match self {
+            Distribution::Float(d) => d.single(),
+            Distribution::Int(d) => d.single(),
+            Distribution::Categorical(d) => d.single(),
+        }
+    }
 }
 
 /// A named map from parameter names to distributions.
@@ -67,6 +80,15 @@ impl FloatDistribution {
             high,
             log,
             step,
+        }
+    }
+
+    /// Check if this distribution has only one possible value.
+    pub fn single(&self) -> bool {
+        if let Some(step) = self.step {
+            ((self.high - self.low) / step).round() < 1.0
+        } else {
+            (self.high - self.low).abs() < 1e-15
         }
     }
 
@@ -117,6 +139,12 @@ impl IntDistribution {
         }
     }
 
+    /// Check if this distribution has only one possible value.
+    pub fn single(&self) -> bool {
+        let step = self.step.unwrap_or(1);
+        (self.high - self.low) < step
+    }
+
     /// Check if a value is within the distribution's support.
     pub fn contains(&self, value: i64) -> bool {
         if value < self.low || value > self.high {
@@ -135,6 +163,11 @@ impl CategoricalDistribution {
     pub fn new(choices: Vec<String>) -> Self {
         assert!(!choices.is_empty(), "CategoricalDistribution requires at least one choice");
         Self { choices }
+    }
+
+    /// Check if this distribution has only one possible value.
+    pub fn single(&self) -> bool {
+        self.choices.len() == 1
     }
 
     /// Check if an index is valid for this distribution.
