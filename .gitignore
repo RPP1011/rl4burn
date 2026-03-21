@@ -5,4 +5,4 @@
 /checkpoints
 /wandb
 /.claude
-/plans
+/plans__pycache__/
