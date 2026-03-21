@@ -4,7 +4,11 @@ mod tpe;
 
 pub use cmaes::{CmaEsConfig, CmaEsSampler};
 pub use random::RandomSampler;
-pub use tpe::{TpeSampler, TpeSamplerConfig};
+pub use tpe::{
+    calculate_order, default_gamma, default_weights, gaussian_log_pdf,
+    hyperopt_default_gamma, CategoricalParzenEstimator, GammaStrategy, ParzenEstimator,
+    TpeSampler, TpeSamplerConfig,
+};
 
 use crate::distributions::Distribution;
 use crate::study::Study;

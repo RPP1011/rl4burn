@@ -1,0 +1,12 @@
+[package]
+name = "rl4burn-tune-py"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "rl4burn_tune_py"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.24", features = ["extension-module"] }
+rl4burn-tune = { path = "../rl4burn-tune" }

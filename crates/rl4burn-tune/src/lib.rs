@@ -14,6 +14,10 @@ mod proofs;
 
 pub use distributions::*;
 pub use pruners::{HyperbandPruner, MedianPruner, PercentilePruner, Pruner};
-pub use samplers::{CmaEsConfig, CmaEsSampler, RandomSampler, Sampler, TpeSampler, TpeSamplerConfig};
+pub use samplers::{
+    calculate_order, default_gamma, default_weights, gaussian_log_pdf, hyperopt_default_gamma,
+    CategoricalParzenEstimator, CmaEsConfig, CmaEsSampler, GammaStrategy, ParzenEstimator,
+    RandomSampler, Sampler, TpeSampler, TpeSamplerConfig,
+};
 pub use study::{Direction, Study, StudyConfig};
 pub use trial::{FrozenTrial, Trial, TrialState};

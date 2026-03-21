@@ -1,0 +1,3 @@
+optuna>=4.8
+scipy
+numpy
