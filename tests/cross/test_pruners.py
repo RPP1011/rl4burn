@@ -282,8 +282,39 @@ class TestHyperbandPruner:
 
 
 class TestWilcoxonAverageIsBest:
-    """Placeholder for average_is_best mode (Phase 4a)."""
+    """Tests for average_is_best mode (Phase 4a)."""
 
-    @pytest.mark.skip(reason="Phase 4a: average_is_best not yet implemented")
     def test_wilcoxon_average_is_best(self):
-        pass
+        """With average_is_best=True, a trial far above the step-wise mean should be pruned."""
+        rl_study = _create_rl4burn_study_with_trials(10, 20)
+        rl_pruner = rl.wilcoxon_pruner(
+            p_threshold=0.1, n_min_steps=5, n_startup_trials=0, average_is_best=True
+        )
+
+        rl_sampler = rl.random_sampler(CROSS_SEED + 1)
+        trial = rl_study.ask()
+        trial.suggest_float("x", -5.0, 5.0, rl_sampler, rl_study)
+        # Report values consistently far worse than any completed trial
+        for step in range(20):
+            trial.report(step, 10000.0)
+
+        # Should be pruned because 10000.0 is way above the average at each step
+        assert trial.should_prune(rl_study, rl_pruner)
+
+    def test_wilcoxon_average_is_best_no_prune_good_trial(self):
+        """With average_is_best=True, a trial better than average should NOT be pruned."""
+        rl_study = _create_rl4burn_study_with_trials(10, 20)
+        rl_pruner = rl.wilcoxon_pruner(
+            p_threshold=0.1, n_min_steps=5, n_startup_trials=0, average_is_best=True
+        )
+
+        rl_sampler = rl.random_sampler(CROSS_SEED + 2)
+        trial = rl_study.ask()
+        trial.suggest_float("x", -5.0, 5.0, rl_sampler, rl_study)
+        # Report values well below the average (minimization, so lower is better)
+        # The average offset across trials 0..9 is 0.5*4.5 = 2.25; use 0.0 to be clearly better
+        for step in range(20):
+            trial.report(step, 1.0 / (step + 1))
+
+        # Should NOT be pruned -- values are better than the average
+        assert not trial.should_prune(rl_study, rl_pruner)

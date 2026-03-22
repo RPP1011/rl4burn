@@ -21,15 +21,19 @@ pub struct WilcoxonPruner {
     pub n_min_steps: usize,
     /// Number of startup trials before pruning begins.
     pub n_startup_trials: usize,
+    /// When true, compare against the step-wise average of all completed trials
+    /// instead of the single best trial.
+    pub average_is_best: bool,
 }
 
 impl WilcoxonPruner {
     /// Create a new Wilcoxon pruner.
-    pub fn new(p_threshold: f64, n_min_steps: usize, n_startup_trials: usize) -> Self {
+    pub fn new(p_threshold: f64, n_min_steps: usize, n_startup_trials: usize, average_is_best: bool) -> Self {
         Self {
             p_threshold,
             n_min_steps,
             n_startup_trials,
+            average_is_best,
         }
     }
 }
@@ -40,6 +44,7 @@ impl Default for WilcoxonPruner {
             p_threshold: 0.1,
             n_min_steps: 5,
             n_startup_trials: 5,
+            average_is_best: false,
         }
     }
 }
@@ -140,21 +145,44 @@ impl Pruner for WilcoxonPruner {
             return false;
         }
 
-        // Find the best completed trial
-        let best = match study.best_trial() {
-            Some(t) => t,
-            None => return false,
-        };
-
         // Compute paired differences at matching steps
         let mut differences = Vec::new();
-        for (&step, &trial_val) in &trial.intermediate_values {
-            if let Some(&best_val) = best.intermediate_values.get(&step) {
-                let diff = match study.direction() {
-                    Direction::Minimize => trial_val - best_val, // Positive = trial is worse
-                    Direction::Maximize => best_val - trial_val, // Positive = trial is worse
-                };
-                differences.push(diff);
+
+        if self.average_is_best {
+            // Compare against step-wise average of all completed trials
+            // Collect all steps present in the current trial
+            for (&step, &trial_val) in &trial.intermediate_values {
+                let mut sum = 0.0;
+                let mut count = 0usize;
+                for t in &completed {
+                    if let Some(&v) = t.intermediate_values.get(&step) {
+                        sum += v;
+                        count += 1;
+                    }
+                }
+                if count > 0 {
+                    let avg = sum / count as f64;
+                    let diff = match study.direction() {
+                        Direction::Minimize => trial_val - avg,
+                        Direction::Maximize => avg - trial_val,
+                    };
+                    differences.push(diff);
+                }
+            }
+        } else {
+            // Compare against the single best completed trial
+            let best = match study.best_trial() {
+                Some(t) => t,
+                None => return false,
+            };
+            for (&step, &trial_val) in &trial.intermediate_values {
+                if let Some(&best_val) = best.intermediate_values.get(&step) {
+                    let diff = match study.direction() {
+                        Direction::Minimize => trial_val - best_val,
+                        Direction::Maximize => best_val - trial_val,
+                    };
+                    differences.push(diff);
+                }
             }
         }
 
@@ -184,7 +212,7 @@ mod tests {
 
     #[test]
     fn test_wilcoxon_no_prune_during_startup() {
-        let pruner = WilcoxonPruner::new(0.1, 5, 10);
+        let pruner = WilcoxonPruner::new(0.1, 5, 10, false);
         let study = Study::new(Direction::Minimize);
         let trial = FrozenTrial::new(0);
         assert!(!pruner.prune(&study, &trial));

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -38,6 +39,12 @@ pub struct FrozenTrial {
     /// Negative values indicate feasible constraints, positive values indicate violations.
     /// A trial is feasible if all constraint values are <= 0.
     pub constraint_values: Option<Vec<f64>>,
+    /// Timestamp (epoch millis) when the trial started.
+    pub datetime_start: Option<u64>,
+    /// Timestamp (epoch millis) when the trial completed.
+    pub datetime_complete: Option<u64>,
+    /// Distributions used for each parameter in this trial.
+    pub distributions: HashMap<String, Distribution>,
 }
 
 impl FrozenTrial {
@@ -52,6 +59,9 @@ impl FrozenTrial {
             user_attrs: HashMap::new(),
             system_attrs: HashMap::new(),
             constraint_values: None,
+            datetime_start: None,
+            datetime_complete: None,
+            distributions: HashMap::new(),
         }
     }
 
@@ -69,6 +79,14 @@ impl FrozenTrial {
         match &self.constraint_values {
             None => 0.0,
             Some(cv) => cv.iter().map(|&v| v.max(0.0)).sum(),
+        }
+    }
+
+    /// Duration of the trial in milliseconds, if both timestamps are set.
+    pub fn duration_millis(&self) -> Option<u64> {
+        match (self.datetime_start, self.datetime_complete) {
+            (Some(start), Some(end)) => Some(end.saturating_sub(start)),
+            _ => None,
         }
     }
 
@@ -130,6 +148,8 @@ pub struct Trial {
     pub system_attrs: HashMap<String, String>,
     /// Constraint values for constrained optimization.
     pub constraint_values: Option<Vec<f64>>,
+    /// Distributions used for each parameter in this trial.
+    pub distributions: HashMap<String, Distribution>,
 }
 
 impl Trial {
@@ -142,6 +162,7 @@ impl Trial {
             user_attrs: HashMap::new(),
             system_attrs: HashMap::new(),
             constraint_values: None,
+            distributions: HashMap::new(),
         }
     }
 
@@ -178,6 +199,7 @@ impl Trial {
 
         let value = sampler.sample(study, self, name, distribution);
         self.params.insert(name.to_string(), value);
+        self.distributions.insert(name.to_string(), distribution.clone());
         value
     }
 
@@ -257,6 +279,9 @@ impl Trial {
             user_attrs: self.user_attrs.clone(),
             system_attrs: self.system_attrs.clone(),
             constraint_values: self.constraint_values.clone(),
+            datetime_start: None,
+            datetime_complete: None,
+            distributions: self.distributions.clone(),
         };
 
         if pruner.prune(study, &frozen) {
