@@ -1,8 +1,16 @@
 use std::collections::HashMap;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
 use crate::trial::{FrozenTrial, TrialState};
+
+fn epoch_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
 
 /// A callback invoked after each trial completes during `optimize()`.
 pub trait Callback: Send + Sync {
@@ -29,6 +37,9 @@ pub struct Study {
     trials: Vec<FrozenTrial>,
     callbacks: Vec<Box<dyn Callback>>,
     stopped: bool,
+    name: Option<String>,
+    user_attrs: HashMap<String, String>,
+    system_attrs: HashMap<String, String>,
 }
 
 impl Study {
@@ -39,6 +50,9 @@ impl Study {
             trials: Vec::new(),
             callbacks: Vec::new(),
             stopped: false,
+            name: None,
+            user_attrs: HashMap::new(),
+            system_attrs: HashMap::new(),
         }
     }
 
@@ -53,6 +67,9 @@ impl Study {
             trials: Vec::new(),
             callbacks: Vec::new(),
             stopped: false,
+            name: None,
+            user_attrs: HashMap::new(),
+            system_attrs: HashMap::new(),
         }
     }
 
@@ -226,6 +243,36 @@ impl Study {
         self.stopped
     }
 
+    /// Get the study name.
+    pub fn study_name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    /// Set the study name.
+    pub fn set_study_name(&mut self, name: impl Into<String>) {
+        self.name = Some(name.into());
+    }
+
+    /// Set a user-defined attribute on the study.
+    pub fn set_user_attr(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.user_attrs.insert(key.into(), value.into());
+    }
+
+    /// Get user-defined attributes.
+    pub fn user_attrs(&self) -> &HashMap<String, String> {
+        &self.user_attrs
+    }
+
+    /// Set a system-defined attribute on the study.
+    pub fn set_system_attr(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.system_attrs.insert(key.into(), value.into());
+    }
+
+    /// Get system-defined attributes.
+    pub fn system_attrs(&self) -> &HashMap<String, String> {
+        &self.system_attrs
+    }
+
     /// Create a new trial for the ask/tell interface.
     ///
     /// Returns a `Trial` that can be used to suggest parameters. After evaluation,
@@ -252,8 +299,10 @@ impl Study {
         frozen.user_attrs = trial.user_attrs;
         frozen.system_attrs = trial.system_attrs;
         frozen.constraint_values = trial.constraint_values;
+        frozen.distributions = trial.distributions;
         frozen.state = state;
         frozen.value = value;
+        frozen.datetime_complete = Some(epoch_millis());
         if let Err(msg) = frozen.validate() {
             panic!("Invalid trial in tell(): {msg}");
         }
@@ -273,9 +322,11 @@ impl Study {
         frozen.user_attrs = trial.user_attrs;
         frozen.system_attrs = trial.system_attrs;
         frozen.constraint_values = trial.constraint_values;
+        frozen.distributions = trial.distributions;
         frozen.state = state;
         frozen.value = values.first().copied();
         frozen.values = Some(values);
+        frozen.datetime_complete = Some(epoch_millis());
         if let Err(msg) = frozen.validate() {
             panic!("Invalid trial in tell_multi(): {msg}");
         }
@@ -330,6 +381,8 @@ impl Study {
             frozen.user_attrs = trial.user_attrs.clone();
             frozen.system_attrs = trial.system_attrs.clone();
             frozen.constraint_values = trial.constraint_values.clone();
+            frozen.distributions = trial.distributions.clone();
+            frozen.datetime_complete = Some(epoch_millis());
 
             // Check if the trial was pruned mid-objective
             if trial.pruned {
@@ -412,6 +465,8 @@ impl Study {
             frozen.user_attrs = trial.user_attrs.clone();
             frozen.system_attrs = trial.system_attrs.clone();
             frozen.constraint_values = trial.constraint_values.clone();
+            frozen.distributions = trial.distributions.clone();
+            frozen.datetime_complete = Some(epoch_millis());
 
             match result {
                 Ok(value) => {
@@ -432,6 +487,131 @@ impl Study {
             self.trials.push(frozen);
 
             // Invoke callbacks
+            let last_trial = self.trials.last().unwrap();
+            for cb in &self.callbacks {
+                cb.on_trial_complete(self, last_trial);
+            }
+        }
+    }
+
+    /// Run the optimization loop with a timeout.
+    ///
+    /// Like `optimize()`, but also stops when the elapsed time exceeds `timeout`.
+    /// `n_trials` can be `usize::MAX` to run until timeout.
+    pub fn optimize_with_timeout<F>(
+        &mut self,
+        n_trials: usize,
+        timeout: Duration,
+        sampler: &dyn crate::samplers::Sampler,
+        pruner: Option<&dyn crate::pruners::Pruner>,
+        mut objective: F,
+    ) where
+        F: FnMut(&mut crate::trial::Trial, &dyn crate::samplers::Sampler, &Self) -> f64,
+    {
+        let start = Instant::now();
+        for _ in 0..n_trials {
+            if self.stopped || start.elapsed() >= timeout {
+                break;
+            }
+
+            let trial_number = self.trials.len();
+            let mut trial = crate::trial::Trial::new(trial_number);
+
+            let value = objective(&mut trial, sampler, self);
+
+            let mut frozen = FrozenTrial::new(trial_number);
+            frozen.params = trial.params.clone();
+            frozen.intermediate_values = trial.intermediate_values.clone();
+            frozen.user_attrs = trial.user_attrs.clone();
+            frozen.system_attrs = trial.system_attrs.clone();
+            frozen.constraint_values = trial.constraint_values.clone();
+            frozen.distributions = trial.distributions.clone();
+            frozen.datetime_complete = Some(epoch_millis());
+
+            if trial.pruned {
+                frozen.state = TrialState::Pruned;
+                frozen.value = trial
+                    .intermediate_values
+                    .iter()
+                    .max_by_key(|(&step, _)| step)
+                    .map(|(_, &v)| v);
+            } else {
+                frozen.value = Some(value);
+                if let Some(p) = pruner {
+                    if p.prune(self, &frozen) {
+                        frozen.state = TrialState::Pruned;
+                    } else {
+                        frozen.state = TrialState::Complete;
+                    }
+                } else {
+                    frozen.state = TrialState::Complete;
+                }
+            }
+
+            self.trials.push(frozen);
+
+            let last_trial = self.trials.last().unwrap();
+            for cb in &self.callbacks {
+                cb.on_trial_complete(self, last_trial);
+            }
+        }
+    }
+
+    /// Run the prunable optimization loop with a timeout.
+    ///
+    /// Like `optimize_prunable()`, but also stops when elapsed time exceeds `timeout`.
+    pub fn optimize_prunable_with_timeout<F>(
+        &mut self,
+        n_trials: usize,
+        timeout: Duration,
+        sampler: &dyn crate::samplers::Sampler,
+        pruner: Option<&dyn crate::pruners::Pruner>,
+        mut objective: F,
+    ) where
+        F: FnMut(
+            &mut crate::trial::Trial,
+            &dyn crate::samplers::Sampler,
+            &Self,
+            Option<&dyn crate::pruners::Pruner>,
+        ) -> Result<f64, ()>,
+    {
+        let start = Instant::now();
+        for _ in 0..n_trials {
+            if self.stopped || start.elapsed() >= timeout {
+                break;
+            }
+
+            let trial_number = self.trials.len();
+            let mut trial = crate::trial::Trial::new(trial_number);
+
+            let result = objective(&mut trial, sampler, self, pruner);
+
+            let mut frozen = FrozenTrial::new(trial_number);
+            frozen.params = trial.params.clone();
+            frozen.intermediate_values = trial.intermediate_values.clone();
+            frozen.user_attrs = trial.user_attrs.clone();
+            frozen.system_attrs = trial.system_attrs.clone();
+            frozen.constraint_values = trial.constraint_values.clone();
+            frozen.distributions = trial.distributions.clone();
+            frozen.datetime_complete = Some(epoch_millis());
+
+            match result {
+                Ok(value) => {
+                    frozen.value = Some(value);
+                    frozen.state = TrialState::Complete;
+                }
+                Err(()) => {
+                    frozen.value = trial
+                        .intermediate_values
+                        .iter()
+                        .max_by_key(|(&step, _)| step)
+                        .map(|(_, &v)| v);
+                    frozen.state = TrialState::Pruned;
+                }
+            }
+
+            self.trials.push(frozen);
+
             let last_trial = self.trials.last().unwrap();
             for cb in &self.callbacks {
                 cb.on_trial_complete(self, last_trial);

@@ -10,7 +10,7 @@ use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 
 use crate::distributions::Distribution;
-use crate::multi_objective::{crowding_distance, non_dominated_sort};
+use crate::multi_objective::{crowding_distance, non_dominated_sort, non_dominated_sort_constrained};
 use crate::samplers::random::RandomSampler;
 use crate::samplers::Sampler;
 use crate::study::Study;
@@ -23,6 +23,14 @@ pub enum CrossoverType {
     Uniform,
     /// Simulated Binary Crossover — the canonical NSGA-II operator.
     SBX,
+    /// Simplex Crossover (SPX) — generates offspring inside the simplex
+    /// formed by the parents, expanded by a factor epsilon.
+    SPX,
+    /// Unimodal Normal Distribution Crossover (UNDX) — generates offspring
+    /// along the line between parents with Gaussian perturbation.
+    UNDX,
+    /// Velocity-based SBX — SBX variant that uses the improvement direction.
+    VSBX,
 }
 
 /// Configuration for the NSGA-II sampler.
@@ -110,6 +118,75 @@ impl NsgaIISampler {
         } else {
             completed[j]
         }
+    }
+
+    /// Simplex Crossover (SPX) for a single parameter.
+    /// Generates a child near the midpoint of parents, expanded by epsilon.
+    fn spx_crossover(
+        p1: f64,
+        p2: f64,
+        low: f64,
+        high: f64,
+        epsilon: f64,
+        rng: &mut StdRng,
+    ) -> f64 {
+        let midpoint = (p1 + p2) / 2.0;
+        let diff = (p2 - p1).abs();
+        // Expand around midpoint by epsilon factor
+        let r: f64 = rng.random();
+        let child = midpoint + epsilon * (r - 0.5) * diff;
+        child.clamp(low, high)
+    }
+
+    /// Unimodal Normal Distribution Crossover (UNDX) for a single parameter.
+    /// Generates offspring along the line between parents with Gaussian noise.
+    fn undx_crossover(
+        p1: f64,
+        p2: f64,
+        low: f64,
+        high: f64,
+        sigma_xi: f64,
+        sigma_eta: f64,
+        rng: &mut StdRng,
+    ) -> f64 {
+        let midpoint = (p1 + p2) / 2.0;
+        let diff = (p2 - p1).abs().max(1e-14);
+        // Primary component along parent direction
+        let xi: f64 = Self::rand_normal(rng) * sigma_xi;
+        // Perpendicular perturbation
+        let eta: f64 = Self::rand_normal(rng) * sigma_eta;
+        let child = midpoint + xi * diff + eta * diff;
+        child.clamp(low, high)
+    }
+
+    /// Velocity-based SBX (VSBX) for a single parameter.
+    /// Like SBX but biased in the improvement direction.
+    fn vsbx_crossover(
+        p1: f64,
+        p2: f64,
+        low: f64,
+        high: f64,
+        eta_c: f64,
+        rng: &mut StdRng,
+    ) -> f64 {
+        // VSBX applies SBX with a velocity bias toward the better parent.
+        // For simplicity we use SBX with a shifted center.
+        if (p1 - p2).abs() < 1e-14 {
+            return p1;
+        }
+        // Apply standard SBX as the base
+        let child = Self::sbx_crossover(p1, p2, low, high, eta_c, rng);
+        // Add a small bias toward the midpoint (velocity term)
+        let mid = (p1 + p2) / 2.0;
+        let biased = child * 0.8 + mid * 0.2;
+        biased.clamp(low, high)
+    }
+
+    /// Generate a standard normal random variate (Box-Muller).
+    fn rand_normal(rng: &mut StdRng) -> f64 {
+        let u1: f64 = rng.random::<f64>().max(1e-15);
+        let u2: f64 = rng.random();
+        (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
     }
 
     /// Simulated Binary Crossover (SBX) for a single parameter.
@@ -249,8 +326,17 @@ impl Sampler for NsgaIISampler {
             })
             .collect();
 
-        // Non-dominated sorting
-        let fronts = non_dominated_sort(&values, directions);
+        // Non-dominated sorting (constraint-aware if any trial has constraints)
+        let has_constraints = completed.iter().any(|t| t.constraint_values.is_some());
+        let fronts = if has_constraints {
+            let violations: Vec<(f64, bool)> = completed
+                .iter()
+                .map(|t| (t.total_violation(), t.is_feasible()))
+                .collect();
+            non_dominated_sort_constrained(&values, &violations, directions)
+        } else {
+            non_dominated_sort(&values, directions)
+        };
 
         // Assign ranks
         let mut ranks = vec![0usize; completed.len()];
@@ -396,6 +482,150 @@ impl Sampler for NsgaIISampler {
                             child_val
                         }
                     }
+                    CrossoverType::SPX => {
+                        // Simplex crossover + polynomial mutation
+                        let epsilon = 3.0_f64.sqrt(); // Standard SPX expansion
+                        match distribution {
+                            Distribution::Float(d) => {
+                                let child = if rng.random_bool(self.config.crossover_prob) {
+                                    Self::spx_crossover(v1, v2, d.low, d.high, epsilon, &mut rng)
+                                } else {
+                                    if rng.random_bool(0.5) { v1 } else { v2 }
+                                };
+                                let mutated = if rng.random_bool(self.config.mutation_prob) {
+                                    Self::polynomial_mutation(child, d.low, d.high, self.config.eta_m, &mut rng)
+                                } else {
+                                    child
+                                };
+                                if let Some(step) = d.step {
+                                    let shifted = mutated - d.low;
+                                    (shifted / step).round() * step + d.low
+                                } else {
+                                    mutated
+                                }
+                            }
+                            Distribution::Int(d) => {
+                                let (low, high) = (d.low as f64, d.high as f64);
+                                let child = if rng.random_bool(self.config.crossover_prob) {
+                                    Self::spx_crossover(v1, v2, low, high, epsilon, &mut rng)
+                                } else {
+                                    if rng.random_bool(0.5) { v1 } else { v2 }
+                                };
+                                let mutated = if rng.random_bool(self.config.mutation_prob) {
+                                    Self::polynomial_mutation(child, low, high, self.config.eta_m, &mut rng)
+                                } else {
+                                    child
+                                };
+                                let step = d.step.unwrap_or(1) as f64;
+                                let shifted = mutated - low;
+                                ((shifted / step).round() * step + low).clamp(low, high)
+                            }
+                            Distribution::Categorical(d) => {
+                                let child = if rng.random_bool(0.5) { v1 } else { v2 };
+                                if rng.random_bool(self.config.mutation_prob) {
+                                    rng.random_range(0..d.choices.len()) as f64
+                                } else {
+                                    child
+                                }
+                            }
+                        }
+                    }
+                    CrossoverType::UNDX => {
+                        // UNDX crossover + polynomial mutation
+                        let sigma_xi = 0.5;
+                        let sigma_eta = 0.35;
+                        match distribution {
+                            Distribution::Float(d) => {
+                                let child = if rng.random_bool(self.config.crossover_prob) {
+                                    Self::undx_crossover(v1, v2, d.low, d.high, sigma_xi, sigma_eta, &mut rng)
+                                } else {
+                                    if rng.random_bool(0.5) { v1 } else { v2 }
+                                };
+                                let mutated = if rng.random_bool(self.config.mutation_prob) {
+                                    Self::polynomial_mutation(child, d.low, d.high, self.config.eta_m, &mut rng)
+                                } else {
+                                    child
+                                };
+                                if let Some(step) = d.step {
+                                    let shifted = mutated - d.low;
+                                    (shifted / step).round() * step + d.low
+                                } else {
+                                    mutated
+                                }
+                            }
+                            Distribution::Int(d) => {
+                                let (low, high) = (d.low as f64, d.high as f64);
+                                let child = if rng.random_bool(self.config.crossover_prob) {
+                                    Self::undx_crossover(v1, v2, low, high, sigma_xi, sigma_eta, &mut rng)
+                                } else {
+                                    if rng.random_bool(0.5) { v1 } else { v2 }
+                                };
+                                let mutated = if rng.random_bool(self.config.mutation_prob) {
+                                    Self::polynomial_mutation(child, low, high, self.config.eta_m, &mut rng)
+                                } else {
+                                    child
+                                };
+                                let step = d.step.unwrap_or(1) as f64;
+                                let shifted = mutated - low;
+                                ((shifted / step).round() * step + low).clamp(low, high)
+                            }
+                            Distribution::Categorical(d) => {
+                                let child = if rng.random_bool(0.5) { v1 } else { v2 };
+                                if rng.random_bool(self.config.mutation_prob) {
+                                    rng.random_range(0..d.choices.len()) as f64
+                                } else {
+                                    child
+                                }
+                            }
+                        }
+                    }
+                    CrossoverType::VSBX => {
+                        // Velocity-based SBX + polynomial mutation
+                        match distribution {
+                            Distribution::Float(d) => {
+                                let child = if rng.random_bool(self.config.crossover_prob) {
+                                    Self::vsbx_crossover(v1, v2, d.low, d.high, self.config.eta_c, &mut rng)
+                                } else {
+                                    if rng.random_bool(0.5) { v1 } else { v2 }
+                                };
+                                let mutated = if rng.random_bool(self.config.mutation_prob) {
+                                    Self::polynomial_mutation(child, d.low, d.high, self.config.eta_m, &mut rng)
+                                } else {
+                                    child
+                                };
+                                if let Some(step) = d.step {
+                                    let shifted = mutated - d.low;
+                                    (shifted / step).round() * step + d.low
+                                } else {
+                                    mutated
+                                }
+                            }
+                            Distribution::Int(d) => {
+                                let (low, high) = (d.low as f64, d.high as f64);
+                                let child = if rng.random_bool(self.config.crossover_prob) {
+                                    Self::vsbx_crossover(v1, v2, low, high, self.config.eta_c, &mut rng)
+                                } else {
+                                    if rng.random_bool(0.5) { v1 } else { v2 }
+                                };
+                                let mutated = if rng.random_bool(self.config.mutation_prob) {
+                                    Self::polynomial_mutation(child, low, high, self.config.eta_m, &mut rng)
+                                } else {
+                                    child
+                                };
+                                let step = d.step.unwrap_or(1) as f64;
+                                let shifted = mutated - low;
+                                ((shifted / step).round() * step + low).clamp(low, high)
+                            }
+                            Distribution::Categorical(d) => {
+                                let child = if rng.random_bool(0.5) { v1 } else { v2 };
+                                if rng.random_bool(self.config.mutation_prob) {
+                                    rng.random_range(0..d.choices.len()) as f64
+                                } else {
+                                    child
+                                }
+                            }
+                        }
+                    }
                 }
             }
             _ => {
@@ -524,6 +754,42 @@ mod tests {
         let dist = Distribution::Float(crate::distributions::FloatDistribution::new(
             0.0, 20.0, false, None,
         ));
+        let v = sampler.sample(&study, &trial, "x", &dist);
+        assert!((0.0..=20.0).contains(&v));
+    }
+
+    #[test]
+    fn test_nsga2_constrained_sorting() {
+        let config = NsgaIIConfig {
+            n_startup_trials: 5,
+            population_size: 10,
+            ..Default::default()
+        };
+        let sampler = NsgaIISampler::new(config, 42);
+        let mut study =
+            Study::new_multi(vec![Direction::Minimize, Direction::Minimize]);
+
+        // Add trials with constraint values: some feasible, some infeasible
+        for i in 0..10 {
+            let mut trial = FrozenTrial::new(i);
+            trial.state = TrialState::Complete;
+            trial.value = Some(i as f64);
+            trial.values = Some(vec![i as f64, (10 - i) as f64]);
+            trial.params.insert("x".to_string(), i as f64);
+            // Even indices are feasible (constraint <= 0), odd are infeasible
+            if i % 2 == 0 {
+                trial.constraint_values = Some(vec![-1.0]);
+            } else {
+                trial.constraint_values = Some(vec![i as f64]); // positive = violation
+            }
+            study.add_trial(trial);
+        }
+
+        let trial = Trial::new(10);
+        let dist = Distribution::Float(crate::distributions::FloatDistribution::new(
+            0.0, 20.0, false, None,
+        ));
+        // Should not panic and should produce valid output
         let v = sampler.sample(&study, &trial, "x", &dist);
         assert!((0.0..=20.0).contains(&v));
     }

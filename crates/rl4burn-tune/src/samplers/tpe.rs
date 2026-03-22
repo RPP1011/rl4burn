@@ -24,6 +24,9 @@ pub struct TpeSamplerConfig {
     pub consider_endpoints: bool,
     /// Whether to use multivariate TPE (false = independent).
     pub multivariate: bool,
+    /// Whether to decompose the search space into conditionally independent
+    /// subspaces and sample jointly per subspace. Requires `multivariate = true`.
+    pub group: bool,
     /// Whether to use the constant liar strategy for parallel sampling.
     /// When enabled, running trials are included with imputed values.
     pub constant_liar: bool,
@@ -50,6 +53,7 @@ impl Default for TpeSamplerConfig {
             consider_magic_clip: true,
             consider_endpoints: false,
             multivariate: false,
+            group: false,
             constant_liar: false,
             gamma_strategy: GammaStrategy::Default,
         }
@@ -661,6 +665,11 @@ impl TpeSampler {
 
     /// Split completed trials into good/bad index groups, sorted by objective.
     /// Returns (good_indices, bad_indices) into the `completed` slice.
+    ///
+    /// Feasible trials are always preferred over infeasible ones. Among feasible
+    /// trials the sort is by objective value (respecting the optimisation
+    /// direction). Among infeasible trials the sort is by ascending total
+    /// constraint violation so that "almost feasible" trials rank higher.
     fn split_trials(
         &self,
         study: &Study,
@@ -669,12 +678,31 @@ impl TpeSampler {
         let n = completed.len();
         let mut trial_indices: Vec<usize> = (0..n).collect();
         trial_indices.sort_by(|&a, &b| {
-            let va = completed[a].value.unwrap_or(f64::INFINITY);
-            let vb = completed[b].value.unwrap_or(f64::INFINITY);
-            if study.direction() == crate::study::Direction::Maximize {
-                vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
-            } else {
-                va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
+            let ta = &completed[a];
+            let tb = &completed[b];
+            let fa = ta.is_feasible();
+            let fb = tb.is_feasible();
+
+            match (fa, fb) {
+                // Both feasible – sort by objective value.
+                (true, true) => {
+                    let va = ta.value.unwrap_or(f64::INFINITY);
+                    let vb = tb.value.unwrap_or(f64::INFINITY);
+                    if study.direction() == crate::study::Direction::Maximize {
+                        vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
+                    } else {
+                        va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
+                    }
+                }
+                // Feasible beats infeasible.
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                // Both infeasible – sort by total violation ascending.
+                (false, false) => {
+                    let va = ta.total_violation();
+                    let vb = tb.total_violation();
+                    va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
+                }
             }
         });
 
@@ -687,6 +715,10 @@ impl TpeSampler {
     /// Split completed trials into good/bad for multi-objective studies using
     /// Pareto dominance (MOTPE). Fills the "good" group front-by-front until
     /// gamma(n) trials are reached.
+    ///
+    /// Feasible trials always dominate infeasible ones. Among feasible trials
+    /// the standard non-dominated sort applies. Among infeasible trials the
+    /// sort is by ascending total constraint violation.
     fn split_trials_multi(
         &self,
         completed: &[&crate::trial::FrozenTrial],
@@ -695,29 +727,57 @@ impl TpeSampler {
         let n = completed.len();
         let n_good = self.gamma(n);
 
-        // Get objective values
-        let values: Vec<Vec<f64>> = completed
+        // Partition indices into feasible / infeasible.
+        let mut feasible_indices: Vec<usize> = Vec::new();
+        let mut infeasible_indices: Vec<usize> = Vec::new();
+        for i in 0..n {
+            if completed[i].is_feasible() {
+                feasible_indices.push(i);
+            } else {
+                infeasible_indices.push(i);
+            }
+        }
+
+        // Sort infeasible by total violation ascending (almost-feasible first).
+        infeasible_indices.sort_by(|&a, &b| {
+            let va = completed[a].total_violation();
+            let vb = completed[b].total_violation();
+            va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Non-dominated sort on feasible trials only.
+        let feasible_values: Vec<Vec<f64>> = feasible_indices
             .iter()
-            .map(|t| {
-                t.values
+            .map(|&i| {
+                completed[i]
+                    .values
                     .clone()
-                    .unwrap_or_else(|| t.value.map(|v| vec![v]).unwrap_or_default())
+                    .unwrap_or_else(|| completed[i].value.map(|v| vec![v]).unwrap_or_default())
             })
             .collect();
 
-        let fronts = crate::multi_objective::non_dominated_sort(&values, directions);
+        let fronts = crate::multi_objective::non_dominated_sort(&feasible_values, directions);
 
+        // Fill good group: feasible fronts first, then infeasible by violation.
         let mut good = Vec::new();
         for front in &fronts {
             if good.len() >= n_good {
                 break;
             }
-            for &idx in front {
+            for &local_idx in front {
                 if good.len() >= n_good {
                     break;
                 }
-                good.push(idx);
+                good.push(feasible_indices[local_idx]);
             }
+        }
+
+        // If we still need more, fill from infeasible (sorted by violation).
+        for &idx in &infeasible_indices {
+            if good.len() >= n_good {
+                break;
+            }
+            good.push(idx);
         }
 
         let good_set: std::collections::HashSet<usize> = good.iter().copied().collect();

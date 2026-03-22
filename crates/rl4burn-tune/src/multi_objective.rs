@@ -119,6 +119,103 @@ pub fn crowding_distance(values: &[Vec<f64>], directions: &[Direction]) -> Vec<f
     distances
 }
 
+/// Check if solution `a` dominates solution `b` considering constraints.
+///
+/// Rules:
+/// 1. If a is feasible and b is not, a dominates b
+/// 2. If both are infeasible, the one with less total violation dominates
+/// 3. If both are feasible, use normal Pareto dominance
+pub fn constrained_dominates(
+    a_values: &[f64],
+    b_values: &[f64],
+    a_violation: f64,
+    b_violation: f64,
+    a_feasible: bool,
+    b_feasible: bool,
+    directions: &[Direction],
+) -> bool {
+    match (a_feasible, b_feasible) {
+        // Both feasible: use normal Pareto dominance
+        (true, true) => dominates(a_values, b_values, directions),
+        // a feasible, b not: a dominates
+        (true, false) => true,
+        // a not feasible, b feasible: a does not dominate
+        (false, true) => false,
+        // Both infeasible: less total violation dominates
+        (false, false) => a_violation < b_violation,
+    }
+}
+
+/// Perform non-dominated sorting considering constraint violations.
+///
+/// Uses `constrained_dominates` instead of `dominates` for comparisons.
+/// `violations` contains (total_violation, is_feasible) for each solution.
+pub fn non_dominated_sort_constrained(
+    values: &[Vec<f64>],
+    violations: &[(f64, bool)],
+    directions: &[Direction],
+) -> Vec<Vec<usize>> {
+    let n = values.len();
+    if n == 0 {
+        return vec![];
+    }
+    assert_eq!(n, violations.len());
+
+    let mut domination_count = vec![0usize; n];
+    let mut dominated_by: Vec<Vec<usize>> = vec![vec![]; n];
+
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let i_dom_j = constrained_dominates(
+                &values[i],
+                &values[j],
+                violations[i].0,
+                violations[j].0,
+                violations[i].1,
+                violations[j].1,
+                directions,
+            );
+            let j_dom_i = constrained_dominates(
+                &values[j],
+                &values[i],
+                violations[j].0,
+                violations[i].0,
+                violations[j].1,
+                violations[i].1,
+                directions,
+            );
+            if i_dom_j {
+                dominated_by[i].push(j);
+                domination_count[j] += 1;
+            } else if j_dom_i {
+                dominated_by[j].push(i);
+                domination_count[i] += 1;
+            }
+        }
+    }
+
+    let mut fronts = vec![];
+    let mut current_front: Vec<usize> = (0..n)
+        .filter(|&i| domination_count[i] == 0)
+        .collect();
+
+    while !current_front.is_empty() {
+        let mut next_front = vec![];
+        for &i in &current_front {
+            for &j in &dominated_by[i] {
+                domination_count[j] -= 1;
+                if domination_count[j] == 0 {
+                    next_front.push(j);
+                }
+            }
+        }
+        fronts.push(current_front);
+        current_front = next_front;
+    }
+
+    fronts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,5 +311,90 @@ mod tests {
         // Middle point should have finite distance
         assert!(distances[1].is_finite());
         assert!(distances[1] > 0.0);
+    }
+
+    #[test]
+    fn test_constrained_dominates_feasible_vs_infeasible() {
+        let dirs = vec![Direction::Minimize, Direction::Minimize];
+        // Feasible a dominates infeasible b regardless of objective values
+        assert!(constrained_dominates(
+            &[10.0, 10.0], &[1.0, 1.0],
+            0.0, 1.0, true, false, &dirs,
+        ));
+        // Infeasible a does not dominate feasible b
+        assert!(!constrained_dominates(
+            &[1.0, 1.0], &[10.0, 10.0],
+            1.0, 0.0, false, true, &dirs,
+        ));
+    }
+
+    #[test]
+    fn test_constrained_dominates_both_infeasible() {
+        let dirs = vec![Direction::Minimize, Direction::Minimize];
+        // Less violation dominates more violation
+        assert!(constrained_dominates(
+            &[10.0, 10.0], &[1.0, 1.0],
+            0.5, 2.0, false, false, &dirs,
+        ));
+        assert!(!constrained_dominates(
+            &[1.0, 1.0], &[10.0, 10.0],
+            2.0, 0.5, false, false, &dirs,
+        ));
+        // Equal violation: neither dominates
+        assert!(!constrained_dominates(
+            &[1.0, 1.0], &[2.0, 2.0],
+            1.0, 1.0, false, false, &dirs,
+        ));
+    }
+
+    #[test]
+    fn test_constrained_dominates_both_feasible() {
+        let dirs = vec![Direction::Minimize, Direction::Minimize];
+        // Both feasible: normal Pareto dominance
+        assert!(constrained_dominates(
+            &[1.0, 2.0], &[2.0, 3.0],
+            0.0, 0.0, true, true, &dirs,
+        ));
+        assert!(!constrained_dominates(
+            &[2.0, 3.0], &[1.0, 2.0],
+            0.0, 0.0, true, true, &dirs,
+        ));
+    }
+
+    #[test]
+    fn test_non_dominated_sort_constrained() {
+        let dirs = vec![Direction::Minimize, Direction::Minimize];
+        let values = vec![
+            vec![1.0, 4.0], // feasible
+            vec![0.5, 0.5], // infeasible (violation=2.0)
+            vec![2.0, 3.0], // feasible
+            vec![0.1, 0.1], // infeasible (violation=5.0)
+            vec![3.0, 2.0], // feasible
+        ];
+        let violations = vec![
+            (0.0, true),   // feasible
+            (2.0, false),  // infeasible
+            (0.0, true),   // feasible
+            (5.0, false),  // infeasible
+            (0.0, true),   // feasible
+        ];
+
+        let fronts = non_dominated_sort_constrained(&values, &violations, &dirs);
+
+        // Feasible solutions should be in front 0 (Pareto front among feasibles)
+        let mut front0 = fronts[0].clone();
+        front0.sort();
+        assert_eq!(front0, vec![0, 2, 4]);
+
+        // Infeasible with less violation (idx 1, violation=2.0) should be before
+        // infeasible with more violation (idx 3, violation=5.0)
+        let mut remaining: Vec<usize> = fronts[1..].iter().flatten().copied().collect();
+        remaining.sort();
+        assert!(remaining.contains(&1));
+        assert!(remaining.contains(&3));
+        // idx 1 (violation=2.0) should dominate idx 3 (violation=5.0)
+        let rank_1 = fronts.iter().position(|f| f.contains(&1)).unwrap();
+        let rank_3 = fronts.iter().position(|f| f.contains(&3)).unwrap();
+        assert!(rank_1 < rank_3);
     }
 }

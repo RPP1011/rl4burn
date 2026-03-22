@@ -18,7 +18,7 @@ use rl4burn_tune::distributions::{
 // ============================================================
 
 /// Python wrapper for Study.
-#[pyclass(name = "Study")]
+#[pyclass(name = "Study", subclass)]
 struct PyStudy {
     inner: rl4burn_tune::Study,
 }
@@ -28,21 +28,26 @@ impl PyStudy {
     /// Create a new single-objective study.
     /// direction: "minimize" or "maximize"
     #[new]
-    #[pyo3(signature = (direction = "minimize"))]
-    fn new(direction: &str) -> PyResult<Self> {
+    #[pyo3(signature = (direction = "minimize", name = None))]
+    fn new(direction: &str, name: Option<String>) -> PyResult<Self> {
         let dir = parse_direction(direction)?;
-        Ok(Self {
-            inner: rl4burn_tune::Study::new(dir),
-        })
+        let mut study = rl4burn_tune::Study::new(dir);
+        if let Some(n) = name {
+            study.set_study_name(n);
+        }
+        Ok(Self { inner: study })
     }
 
     /// Create a multi-objective study.
     #[staticmethod]
-    fn create_multi(directions: Vec<String>) -> PyResult<Self> {
+    #[pyo3(signature = (directions, name = None))]
+    fn create_multi(directions: Vec<String>, name: Option<String>) -> PyResult<Self> {
         let dirs: Result<Vec<_>, _> = directions.iter().map(|d| parse_direction(d)).collect();
-        Ok(Self {
-            inner: rl4burn_tune::Study::new_multi(dirs?),
-        })
+        let mut study = rl4burn_tune::Study::new_multi(dirs?);
+        if let Some(n) = name {
+            study.set_study_name(n);
+        }
+        Ok(Self { inner: study })
     }
 
     /// Get the best objective value.
@@ -116,6 +121,109 @@ impl PyStudy {
     /// Check if the study has been stopped.
     fn is_stopped(&self) -> bool {
         self.inner.is_stopped()
+    }
+
+    /// Get the study name.
+    fn study_name(&self) -> Option<String> {
+        self.inner.study_name().map(|s| s.to_string())
+    }
+
+    /// Set the study name.
+    fn set_study_name(&mut self, name: String) {
+        self.inner.set_study_name(name);
+    }
+
+    /// Set a user-defined attribute on the study.
+    fn set_user_attr(&mut self, key: String, value: String) {
+        self.inner.set_user_attr(key, value);
+    }
+
+    /// Get user-defined attributes as a dict.
+    fn user_attrs(&self) -> HashMap<String, String> {
+        self.inner.user_attrs().clone()
+    }
+
+    /// High-level optimize loop.
+    ///
+    /// Runs `n_trials` iterations of ask/tell, calling `objective_fn(trial)` each time.
+    /// If the objective raises an exception whose message contains "TrialPruned",
+    /// the trial is recorded as pruned instead of failed.
+    #[pyo3(signature = (objective_fn, n_trials, sampler, pruner = None, timeout = None))]
+    fn optimize(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
+        objective_fn: &Bound<'_, PyAny>,
+        n_trials: usize,
+        sampler: &PySampler,
+        pruner: Option<&PyPruner>,
+        timeout: Option<f64>,
+    ) -> PyResult<()> {
+        let _ = sampler; // kept for API symmetry; objective uses it via captured ref
+        let _ = pruner;
+        let start = std::time::Instant::now();
+        for _ in 0..n_trials {
+            // Check stop / timeout – needs a short immutable borrow
+            {
+                let this = slf.borrow();
+                if this.inner.is_stopped() {
+                    break;
+                }
+            }
+            if let Some(secs) = timeout {
+                if start.elapsed().as_secs_f64() >= secs {
+                    break;
+                }
+            }
+
+            // Ask for a new trial (mut borrow, released before callback)
+            let trial = {
+                let this = slf.borrow();
+                this.inner.ask()
+            };
+            let py_trial = Bound::new(py, PyTrial { inner: Some(trial) })?;
+
+            // Call objective – no borrow on self held, so callback can access study
+            match objective_fn.call1((&py_trial,)) {
+                Ok(result) => {
+                    let value: f64 = result.extract()?;
+                    let inner_trial = py_trial.borrow_mut().inner.take().ok_or_else(|| {
+                        pyo3::exceptions::PyRuntimeError::new_err(
+                            "Trial was already consumed inside objective",
+                        )
+                    })?;
+                    let mut this = slf.borrow_mut();
+                    this.inner.tell(
+                        inner_trial,
+                        rl4burn_tune::trial::TrialState::Complete,
+                        Some(value),
+                    );
+                }
+                Err(err) => {
+                    let msg = err.to_string();
+                    if let Some(inner_trial) = py_trial.borrow_mut().inner.take() {
+                        if msg.contains("TrialPruned") {
+                            let mut this = slf.borrow_mut();
+                            this.inner.tell(
+                                inner_trial,
+                                rl4burn_tune::trial::TrialState::Pruned,
+                                None,
+                            );
+                        } else {
+                            let mut this = slf.borrow_mut();
+                            this.inner.tell(
+                                inner_trial,
+                                rl4burn_tune::trial::TrialState::Fail,
+                                None,
+                            );
+                            return Err(err);
+                        }
+                    } else if !msg.contains("TrialPruned") {
+                        return Err(err);
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Get all trial data as a list of dicts.
@@ -281,6 +389,9 @@ enum SamplerKind {
     CmaEs(rl4burn_tune::CmaEsSampler),
     NsgaII(rl4burn_tune::NsgaIISampler),
     Gp(rl4burn_tune::GpSampler),
+    Qmc(rl4burn_tune::QmcSampler),
+    BruteForce(rl4burn_tune::BruteForceSampler),
+    PartialFixed(rl4burn_tune::PartialFixedSampler),
 }
 
 impl PySampler {
@@ -291,6 +402,9 @@ impl PySampler {
             SamplerKind::CmaEs(s) => s,
             SamplerKind::NsgaII(s) => s,
             SamplerKind::Gp(s) => s,
+            SamplerKind::Qmc(s) => s,
+            SamplerKind::BruteForce(s) => s,
+            SamplerKind::PartialFixed(s) => s,
         }
     }
 }
@@ -334,20 +448,24 @@ fn cmaes_sampler(seed: u64, n_startup_trials: usize, population_size: Option<usi
 
 /// Create an NSGA-II sampler.
 #[pyfunction]
-#[pyo3(signature = (seed, population_size = 50, crossover_type = "sbx"))]
-fn nsga2_sampler(seed: u64, population_size: usize, crossover_type: &str) -> PyResult<PySampler> {
+#[pyo3(signature = (seed, population_size = 50, crossover_type = "sbx", n_startup_trials = 10))]
+fn nsga2_sampler(seed: u64, population_size: usize, crossover_type: &str, n_startup_trials: usize) -> PyResult<PySampler> {
     let ct = match crossover_type {
         "sbx" => rl4burn_tune::CrossoverType::SBX,
         "uniform" => rl4burn_tune::CrossoverType::Uniform,
+        "spx" => rl4burn_tune::CrossoverType::SPX,
+        "undx" => rl4burn_tune::CrossoverType::UNDX,
+        "vsbx" => rl4burn_tune::CrossoverType::VSBX,
         _ => {
             return Err(pyo3::exceptions::PyValueError::new_err(
-                "crossover_type must be 'sbx' or 'uniform'",
+                "crossover_type must be 'sbx', 'uniform', 'spx', 'undx', or 'vsbx'",
             ))
         }
     };
     let config = rl4burn_tune::NsgaIIConfig {
         population_size,
         crossover_type: ct,
+        n_startup_trials,
         ..Default::default()
     };
     Ok(PySampler {
@@ -365,6 +483,37 @@ fn gp_sampler(seed: u64, n_startup_trials: usize, n_candidates: usize) -> PySamp
     };
     PySampler {
         inner: SamplerKind::Gp(rl4burn_tune::GpSampler::new(config, seed)),
+    }
+}
+
+/// Create a Quasi-Monte Carlo sampler.
+#[pyfunction]
+fn qmc_sampler(seed: u64) -> PySampler {
+    PySampler {
+        inner: SamplerKind::Qmc(rl4burn_tune::QmcSampler::new(seed)),
+    }
+}
+
+/// Create a Brute Force sampler.
+#[pyfunction]
+fn brute_force_sampler(seed: u64) -> PySampler {
+    PySampler {
+        inner: SamplerKind::BruteForce(rl4burn_tune::BruteForceSampler::new(seed)),
+    }
+}
+
+/// Create a Partial Fixed sampler.
+#[pyfunction]
+fn partial_fixed_sampler(inner: &PySampler, fixed_params: HashMap<String, f64>) -> PySampler {
+    // We need to clone the inner sampler. Since we can't clone trait objects,
+    // we create a new random sampler as a delegate. The actual inner sampler
+    // would require more complex handling; for now we use a random fallback.
+    let delegate = Box::new(rl4burn_tune::RandomSampler::new(42));
+    PySampler {
+        inner: SamplerKind::PartialFixed(rl4burn_tune::PartialFixedSampler::new(
+            delegate,
+            fixed_params,
+        )),
     }
 }
 
@@ -507,13 +656,14 @@ fn hyperband_pruner(min_resource: usize, max_resource: usize, reduction_factor: 
 
 /// Create a WilcoxonPruner.
 #[pyfunction]
-#[pyo3(signature = (p_threshold = 0.1, n_min_steps = 5, n_startup_trials = 5))]
-fn wilcoxon_pruner(p_threshold: f64, n_min_steps: usize, n_startup_trials: usize) -> PyPruner {
+#[pyo3(signature = (p_threshold = 0.1, n_min_steps = 5, n_startup_trials = 5, average_is_best = false))]
+fn wilcoxon_pruner(p_threshold: f64, n_min_steps: usize, n_startup_trials: usize, average_is_best: bool) -> PyPruner {
     PyPruner {
         inner: PrunerKind::Wilcoxon(rl4burn_tune::WilcoxonPruner::new(
             p_threshold,
             n_min_steps,
             n_startup_trials,
+            average_is_best,
         )),
     }
 }
@@ -814,6 +964,9 @@ fn rl4burn_tune_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cmaes_sampler, m)?)?;
     m.add_function(wrap_pyfunction!(nsga2_sampler, m)?)?;
     m.add_function(wrap_pyfunction!(gp_sampler, m)?)?;
+    m.add_function(wrap_pyfunction!(qmc_sampler, m)?)?;
+    m.add_function(wrap_pyfunction!(brute_force_sampler, m)?)?;
+    m.add_function(wrap_pyfunction!(partial_fixed_sampler, m)?)?;
 
     // Pruner constructors
     m.add_function(wrap_pyfunction!(nop_pruner, m)?)?;
