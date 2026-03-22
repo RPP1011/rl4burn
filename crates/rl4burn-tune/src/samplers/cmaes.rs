@@ -11,16 +11,13 @@ use crate::trial::{Trial, TrialState};
 
 use super::Sampler;
 
-/// Separable CMA-ES (Covariance Matrix Adaptation Evolution Strategy) sampler.
+/// CMA-ES (Covariance Matrix Adaptation Evolution Strategy) sampler.
 ///
-/// This implements a proper separable CMA-ES that maintains diagonal covariance,
-/// evolution paths, and cumulative step-size adaptation (CSA). All parameters are
-/// transformed to [0,1] internal space for scale-invariance.
+/// For small dimensions (n <= 50), uses full covariance matrix with
+/// eigendecomposition-based sampling. For larger dimensions, falls back
+/// to separable (diagonal) CMA-ES for O(n) updates.
 ///
-/// Compared to full CMA-ES, separable CMA-ES uses only the diagonal of the
-/// covariance matrix, making it O(n) per update instead of O(n²). This is
-/// well-suited for high-dimensional problems with limited parameter correlations.
-///
+/// All parameters are transformed to [0,1] internal space for scale-invariance.
 /// Categorical parameters fall back to random sampling.
 pub struct CmaEsSampler {
     config: CmaEsConfig,
@@ -49,7 +46,7 @@ impl Default for CmaEsConfig {
     }
 }
 
-/// Internal state of separable CMA-ES.
+/// Internal state of CMA-ES.
 #[derive(Debug)]
 struct CmaEsState {
     rng: StdRng,
@@ -61,8 +58,16 @@ struct CmaEsState {
     mean: Vec<f64>,
     /// Global step size.
     sigma: f64,
-    /// Diagonal covariance (per-parameter variance scaling).
+    /// Whether to use full covariance (false = separable/diagonal only).
+    use_full_cov: bool,
+    /// Full covariance matrix (n×n). Only used when use_full_cov=true.
+    c_full: Vec<Vec<f64>>,
+    /// Diagonal covariance (per-parameter variance scaling). Used when use_full_cov=false.
     c_diag: Vec<f64>,
+    /// Eigenvectors of C (columns of B). Only used when use_full_cov=true.
+    eigvecs: Vec<Vec<f64>>,
+    /// Square roots of eigenvalues of C. Only used when use_full_cov=true.
+    eigvals_sqrt: Vec<f64>,
     /// Evolution path for step-size control (p_sigma).
     p_sigma: Vec<f64>,
     /// Evolution path for covariance adaptation (p_c).
@@ -89,6 +94,10 @@ struct CmaEsState {
     pending: HashMap<usize, Vec<f64>>,
     /// Collected (value, internal_vector) pairs for current generation.
     evaluated: Vec<(f64, Vec<f64>)>,
+    /// How often to recompute eigendecomposition.
+    eigen_update_interval: usize,
+    /// Generation at which eigendecomposition was last computed.
+    last_eigen_update: usize,
 }
 
 impl CmaEsState {
@@ -99,7 +108,11 @@ impl CmaEsState {
             param_names: Vec::new(),
             mean: Vec::new(),
             sigma: sigma0,
+            use_full_cov: false,
+            c_full: Vec::new(),
             c_diag: Vec::new(),
+            eigvecs: Vec::new(),
+            eigvals_sqrt: Vec::new(),
             p_sigma: Vec::new(),
             p_c: Vec::new(),
             lambda: 0,
@@ -115,6 +128,8 @@ impl CmaEsState {
             generation: 0,
             pending: HashMap::new(),
             evaluated: Vec::new(),
+            eigen_update_interval: 1,
+            last_eigen_update: 0,
         }
     }
 
@@ -148,7 +163,6 @@ impl CmaEsState {
         let chi_n = (n as f64).sqrt() * (1.0 - 1.0 / (4.0 * n as f64) + 1.0 / (21.0 * (n as f64).powi(2)));
 
         self.mean = vec![0.5; n];
-        self.c_diag = vec![1.0; n];
         self.p_sigma = vec![0.0; n];
         self.p_c = vec![0.0; n];
         self.lambda = lambda;
@@ -162,19 +176,145 @@ impl CmaEsState {
         self.c_mu_lr = c_mu_lr;
         self.chi_n = chi_n;
         self.sigma = sigma0;
+
+        // Use full covariance for small dimensions
+        self.use_full_cov = n <= 50;
+        if self.use_full_cov {
+            // Initialize C = I (identity matrix)
+            self.c_full = vec![vec![0.0; n]; n];
+            for i in 0..n {
+                self.c_full[i][i] = 1.0;
+            }
+            // Initialize eigendecomposition: B = I, D = I
+            self.eigvecs = vec![vec![0.0; n]; n];
+            for i in 0..n {
+                self.eigvecs[i][i] = 1.0;
+            }
+            self.eigvals_sqrt = vec![1.0; n];
+            self.eigen_update_interval = (n as f64 / 10.0).max(1.0) as usize;
+        }
+        self.c_diag = vec![1.0; n];
+
         self.initialized = true;
+    }
+
+    /// Jacobi eigenvalue algorithm for symmetric matrices.
+    /// Returns (eigenvalues, eigenvectors) where eigenvectors are columns of the returned matrix.
+    fn jacobi_eigen(a: &[Vec<f64>]) -> (Vec<f64>, Vec<Vec<f64>>) {
+        let n = a.len();
+        let mut a = a.to_vec();
+        let mut v = vec![vec![0.0; n]; n];
+        for i in 0..n {
+            v[i][i] = 1.0;
+        }
+
+        let max_iter = 100 * n * n;
+        for _ in 0..max_iter {
+            // Find largest off-diagonal element
+            let mut max_val = 0.0_f64;
+            let mut p = 0;
+            let mut q = 1;
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    if a[i][j].abs() > max_val {
+                        max_val = a[i][j].abs();
+                        p = i;
+                        q = j;
+                    }
+                }
+            }
+
+            if max_val < 1e-15 {
+                break;
+            }
+
+            // Compute rotation
+            let theta = if (a[p][p] - a[q][q]).abs() < 1e-20 {
+                std::f64::consts::FRAC_PI_4
+            } else {
+                0.5 * (2.0 * a[p][q] / (a[p][p] - a[q][q])).atan()
+            };
+
+            let cos_t = theta.cos();
+            let sin_t = theta.sin();
+
+            // Apply rotation to A
+            let mut new_a = a.clone();
+            for i in 0..n {
+                if i != p && i != q {
+                    new_a[i][p] = cos_t * a[i][p] + sin_t * a[i][q];
+                    new_a[p][i] = new_a[i][p];
+                    new_a[i][q] = -sin_t * a[i][p] + cos_t * a[i][q];
+                    new_a[q][i] = new_a[i][q];
+                }
+            }
+            new_a[p][p] = cos_t * cos_t * a[p][p]
+                + 2.0 * sin_t * cos_t * a[p][q]
+                + sin_t * sin_t * a[q][q];
+            new_a[q][q] = sin_t * sin_t * a[p][p]
+                - 2.0 * sin_t * cos_t * a[p][q]
+                + cos_t * cos_t * a[q][q];
+            new_a[p][q] = 0.0;
+            new_a[q][p] = 0.0;
+            a = new_a;
+
+            // Apply rotation to V
+            for i in 0..n {
+                let vip = v[i][p];
+                let viq = v[i][q];
+                v[i][p] = cos_t * vip + sin_t * viq;
+                v[i][q] = -sin_t * vip + cos_t * viq;
+            }
+        }
+
+        let eigenvalues: Vec<f64> = (0..n).map(|i| a[i][i]).collect();
+        (eigenvalues, v)
+    }
+
+    /// Recompute eigendecomposition of the covariance matrix.
+    fn update_eigen(&mut self) {
+        if !self.use_full_cov {
+            return;
+        }
+        let (eigenvalues, eigvecs) = Self::jacobi_eigen(&self.c_full);
+        self.eigvals_sqrt = eigenvalues.iter().map(|&v| v.max(1e-20).sqrt()).collect();
+        self.eigvecs = eigvecs;
+        self.last_eigen_update = self.generation;
     }
 
     /// Sample a new candidate vector from the search distribution.
     fn sample_candidate(&mut self) -> Vec<f64> {
         let n = self.mean.len();
-        let mut x = Vec::with_capacity(n);
-        for i in 0..n {
-            let z: f64 = self.rng.sample(rand_distr::StandardNormal);
-            let xi = self.mean[i] + self.sigma * self.c_diag[i].sqrt() * z;
-            x.push(xi.clamp(0.0, 1.0));
+
+        if self.use_full_cov {
+            // Full covariance: x = mean + sigma * B * D * z
+            let z: Vec<f64> = (0..n)
+                .map(|_| self.rng.sample(rand_distr::StandardNormal))
+                .collect();
+
+            // Compute B * D * z
+            let mut bdz = vec![0.0; n];
+            for i in 0..n {
+                for j in 0..n {
+                    bdz[i] += self.eigvecs[i][j] * self.eigvals_sqrt[j] * z[j];
+                }
+            }
+
+            let mut x = Vec::with_capacity(n);
+            for i in 0..n {
+                x.push((self.mean[i] + self.sigma * bdz[i]).clamp(0.0, 1.0));
+            }
+            x
+        } else {
+            // Separable: x = mean + sigma * sqrt(c_diag) * z
+            let mut x = Vec::with_capacity(n);
+            for i in 0..n {
+                let z: f64 = self.rng.sample(rand_distr::StandardNormal);
+                let xi = self.mean[i] + self.sigma * self.c_diag[i].sqrt() * z;
+                x.push(xi.clamp(0.0, 1.0));
+            }
+            x
         }
-        x
     }
 
     /// Update the search distribution from evaluated solutions.
@@ -227,27 +367,58 @@ impl CmaEsState {
                 + h_sigma * sqrt_c_c * mean_diff[j];
         }
 
-        // Update diagonal covariance
+        // Update covariance
         let delta_h = (1.0 - h_sigma) * self.c_c * (2.0 - self.c_c);
-        for j in 0..n {
-            // Rank-1 update
-            let rank1 = self.c_1 * (self.p_c[j] * self.p_c[j]
-                + delta_h * self.c_diag[j]);
 
-            // Rank-mu update
-            let mut rank_mu = 0.0;
-            for (wi, (_, x)) in self.weights.iter().zip(solutions.iter()) {
-                let diff_j = (x[j] - old_mean[j]) / self.sigma;
-                rank_mu += wi * diff_j * diff_j;
+        if self.use_full_cov {
+            // Full covariance update: C = (1-c1-cmu)*C + c1*(pc*pc^T + delta_h*C) + cmu*sum(wi*yi*yi^T)
+            for i in 0..n {
+                for j in 0..n {
+                    let rank1 = self.c_1 * (self.p_c[i] * self.p_c[j]
+                        + delta_h * self.c_full[i][j]);
+
+                    let mut rank_mu = 0.0;
+                    for (wi, (_, x)) in self.weights.iter().zip(solutions.iter()) {
+                        let di = (x[i] - old_mean[i]) / self.sigma;
+                        let dj = (x[j] - old_mean[j]) / self.sigma;
+                        rank_mu += wi * di * dj;
+                    }
+                    rank_mu *= self.c_mu_lr;
+
+                    self.c_full[i][j] = (1.0 - self.c_1 - self.c_mu_lr) * self.c_full[i][j]
+                        + rank1
+                        + rank_mu;
+                }
             }
-            rank_mu *= self.c_mu_lr;
 
-            self.c_diag[j] = (1.0 - self.c_1 - self.c_mu_lr) * self.c_diag[j]
-                + rank1
-                + rank_mu;
+            // Update diagonal from full covariance (for compatibility)
+            for j in 0..n {
+                self.c_diag[j] = self.c_full[j][j].max(1e-20);
+            }
 
-            // Prevent degeneration
-            self.c_diag[j] = self.c_diag[j].max(1e-20);
+            // Periodically recompute eigendecomposition
+            if self.generation - self.last_eigen_update >= self.eigen_update_interval {
+                self.update_eigen();
+            }
+        } else {
+            // Separable (diagonal-only) update
+            for j in 0..n {
+                let rank1 = self.c_1 * (self.p_c[j] * self.p_c[j]
+                    + delta_h * self.c_diag[j]);
+
+                let mut rank_mu = 0.0;
+                for (wi, (_, x)) in self.weights.iter().zip(solutions.iter()) {
+                    let diff_j = (x[j] - old_mean[j]) / self.sigma;
+                    rank_mu += wi * diff_j * diff_j;
+                }
+                rank_mu *= self.c_mu_lr;
+
+                self.c_diag[j] = (1.0 - self.c_1 - self.c_mu_lr) * self.c_diag[j]
+                    + rank1
+                    + rank_mu;
+
+                self.c_diag[j] = self.c_diag[j].max(1e-20);
+            }
         }
 
         // Update sigma via CSA
@@ -505,6 +676,7 @@ mod tests {
         state.initialize(3, 0.3, None);
 
         assert!(state.initialized);
+        assert!(state.use_full_cov); // n=3 <= 50, should use full covariance
         assert!(state.lambda >= 4);
         assert!(state.mu > 0);
         assert!(state.mu < state.lambda);
@@ -512,5 +684,81 @@ mod tests {
         assert!(state.chi_n > 0.0);
         assert!(state.c_sigma > 0.0);
         assert!(state.d_sigma > 0.0);
+        assert_eq!(state.c_full.len(), 3);
+        assert_eq!(state.eigvecs.len(), 3);
+        assert_eq!(state.eigvals_sqrt.len(), 3);
+    }
+
+    #[test]
+    fn test_jacobi_eigen_identity() {
+        let identity = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ];
+        let (eigenvalues, _) = CmaEsState::jacobi_eigen(&identity);
+        for ev in &eigenvalues {
+            assert!((ev - 1.0).abs() < 1e-10, "eigenvalue={ev}, expected 1.0");
+        }
+    }
+
+    #[test]
+    fn test_jacobi_eigen_diagonal() {
+        let diag = vec![
+            vec![4.0, 0.0],
+            vec![0.0, 9.0],
+        ];
+        let (mut eigenvalues, _) = CmaEsState::jacobi_eigen(&diag);
+        eigenvalues.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!((eigenvalues[0] - 4.0).abs() < 1e-10);
+        assert!((eigenvalues[1] - 9.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_jacobi_eigen_symmetric() {
+        let a = vec![
+            vec![2.0, 1.0],
+            vec![1.0, 2.0],
+        ];
+        let (mut eigenvalues, _) = CmaEsState::jacobi_eigen(&a);
+        eigenvalues.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        // Eigenvalues of [[2,1],[1,2]] are 1 and 3
+        assert!((eigenvalues[0] - 1.0).abs() < 1e-10);
+        assert!((eigenvalues[1] - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_cmaes_full_cov_correlated() {
+        // Test that full CMA-ES can handle correlated parameters
+        let sampler = CmaEsSampler::new(
+            CmaEsConfig {
+                n_startup_trials: 5,
+                sigma0: 0.3,
+                population_size: Some(8),
+            },
+            42,
+        );
+        let dist_x = Distribution::Float(crate::distributions::FloatDistribution::new(
+            -5.0, 5.0, false, None,
+        ));
+        let dist_y = Distribution::Float(crate::distributions::FloatDistribution::new(
+            -5.0, 5.0, false, None,
+        ));
+        let mut study = Study::new_default();
+
+        for _ in 0..40 {
+            let trial = Trial::new(study.trials().len());
+            let x = sampler.sample(&study, &trial, "x", &dist_x);
+            let y = sampler.sample(&study, &trial, "y", &dist_y);
+            // Correlated objective: (x+y)^2 + (x-y)^2, minimum at (0,0)
+            let obj = (x + y).powi(2) + (x - y).powi(2);
+            let mut params = HashMap::new();
+            params.insert("x".to_string(), x);
+            params.insert("y".to_string(), y);
+            study.add_completed_trial(params, obj);
+        }
+
+        let best = study.best_value().unwrap();
+        assert!(best < 10.0, "Full CMA-ES should converge on correlated problem, best={best}");
     }
 }
