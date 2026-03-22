@@ -143,6 +143,89 @@ impl PyStudy {
         self.inner.user_attrs().clone()
     }
 
+    /// High-level optimize loop.
+    ///
+    /// Runs `n_trials` iterations of ask/tell, calling `objective_fn(trial)` each time.
+    /// If the objective raises an exception whose message contains "TrialPruned",
+    /// the trial is recorded as pruned instead of failed.
+    #[pyo3(signature = (objective_fn, n_trials, sampler, pruner = None, timeout = None))]
+    fn optimize(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
+        objective_fn: &Bound<'_, PyAny>,
+        n_trials: usize,
+        sampler: &PySampler,
+        pruner: Option<&PyPruner>,
+        timeout: Option<f64>,
+    ) -> PyResult<()> {
+        let _ = sampler; // kept for API symmetry; objective uses it via captured ref
+        let _ = pruner;
+        let start = std::time::Instant::now();
+        for _ in 0..n_trials {
+            // Check stop / timeout – needs a short immutable borrow
+            {
+                let this = slf.borrow();
+                if this.inner.is_stopped() {
+                    break;
+                }
+            }
+            if let Some(secs) = timeout {
+                if start.elapsed().as_secs_f64() >= secs {
+                    break;
+                }
+            }
+
+            // Ask for a new trial (mut borrow, released before callback)
+            let trial = {
+                let this = slf.borrow();
+                this.inner.ask()
+            };
+            let py_trial = Bound::new(py, PyTrial { inner: Some(trial) })?;
+
+            // Call objective – no borrow on self held, so callback can access study
+            match objective_fn.call1((&py_trial,)) {
+                Ok(result) => {
+                    let value: f64 = result.extract()?;
+                    let inner_trial = py_trial.borrow_mut().inner.take().ok_or_else(|| {
+                        pyo3::exceptions::PyRuntimeError::new_err(
+                            "Trial was already consumed inside objective",
+                        )
+                    })?;
+                    let mut this = slf.borrow_mut();
+                    this.inner.tell(
+                        inner_trial,
+                        rl4burn_tune::trial::TrialState::Complete,
+                        Some(value),
+                    );
+                }
+                Err(err) => {
+                    let msg = err.to_string();
+                    if let Some(inner_trial) = py_trial.borrow_mut().inner.take() {
+                        if msg.contains("TrialPruned") {
+                            let mut this = slf.borrow_mut();
+                            this.inner.tell(
+                                inner_trial,
+                                rl4burn_tune::trial::TrialState::Pruned,
+                                None,
+                            );
+                        } else {
+                            let mut this = slf.borrow_mut();
+                            this.inner.tell(
+                                inner_trial,
+                                rl4burn_tune::trial::TrialState::Fail,
+                                None,
+                            );
+                            return Err(err);
+                        }
+                    } else if !msg.contains("TrialPruned") {
+                        return Err(err);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Get all trial data as a list of dicts.
     fn get_trials(&self) -> Vec<HashMap<String, PyObject>> {
         Python::with_gil(|py| {

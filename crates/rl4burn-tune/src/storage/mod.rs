@@ -8,9 +8,13 @@
 
 mod in_memory;
 mod journal;
+#[cfg(feature = "sqlite")]
+pub mod rdb;
 
 pub use in_memory::InMemoryStorage;
 pub use journal::JournalStorage;
+#[cfg(feature = "sqlite")]
+pub use rdb::SqliteStorage;
 
 use crate::study::Direction;
 use crate::trial::{FrozenTrial, TrialState};

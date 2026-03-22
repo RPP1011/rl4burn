@@ -12,6 +12,11 @@ rand_distr = { workspace = true }
 thiserror = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+rusqlite = { version = "0.37", features = ["bundled"], optional = true }
+
+[features]
+default = []
+sqlite = ["rusqlite"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
