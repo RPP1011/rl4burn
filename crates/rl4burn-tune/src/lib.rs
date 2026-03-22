@@ -11,6 +11,7 @@ pub mod samplers;
 pub mod search_space;
 pub mod storage;
 pub mod study;
+pub mod terminator;
 pub mod trial;
 
 #[cfg(kani)]

@@ -24,6 +24,9 @@ pub struct TpeSamplerConfig {
     pub consider_endpoints: bool,
     /// Whether to use multivariate TPE (false = independent).
     pub multivariate: bool,
+    /// Whether to decompose the search space into conditionally independent
+    /// subspaces and sample jointly per subspace. Requires `multivariate = true`.
+    pub group: bool,
     /// Whether to use the constant liar strategy for parallel sampling.
     /// When enabled, running trials are included with imputed values.
     pub constant_liar: bool,
@@ -50,6 +53,7 @@ impl Default for TpeSamplerConfig {
             consider_magic_clip: true,
             consider_endpoints: false,
             multivariate: false,
+            group: false,
             constant_liar: false,
             gamma_strategy: GammaStrategy::Default,
         }

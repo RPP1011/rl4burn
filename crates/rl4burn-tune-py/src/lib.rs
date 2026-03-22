@@ -18,7 +18,7 @@ use rl4burn_tune::distributions::{
 // ============================================================
 
 /// Python wrapper for Study.
-#[pyclass(name = "Study")]
+#[pyclass(name = "Study", subclass)]
 struct PyStudy {
     inner: rl4burn_tune::Study,
 }
