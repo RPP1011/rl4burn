@@ -17,12 +17,16 @@
 //! Redundancy-Reduced World Models without Decoders or Augmentation" (ICLR 2026).
 
 mod cross_verification;
+pub mod trainer;
 
 use burn::prelude::*;
 
+use rl4burn_nn::conv::{ConvEncoder, ConvEncoderConfig};
 use rl4burn_nn::mlp::{Mlp, MlpConfig, NormKind};
 use rl4burn_nn::rssm::{Rssm, RssmConfig, RssmState};
 use rl4burn_nn::symlog::TwohotEncoder;
+
+pub use trainer::{DreamerTrainer, DreamerTrainerConfig};
 
 use crate::loss::kl_balance::{kl_balanced_loss, KlBalanceConfig};
 use crate::loss::representation::{
@@ -69,6 +73,10 @@ pub struct DreamerConfig {
     pub dreamerpro_config: DreamerProConfig,
     /// Slow critic EMA decay rate.
     pub slow_critic_decay: f32,
+    /// Optional CNN encoder config for image observations.
+    /// When `Some`, observations are images `[batch, C, H, W]` encoded
+    /// through a CNN before being passed to the RSSM.
+    pub encoder_config: Option<ConvEncoderConfig>,
 }
 
 impl Default for DreamerConfig {
@@ -94,6 +102,7 @@ impl Default for DreamerConfig {
             infonce_config: InfoNceConfig::default(),
             dreamerpro_config: DreamerProConfig::default(),
             slow_critic_decay: 0.98,
+            encoder_config: None,
         }
     }
 }
@@ -117,6 +126,8 @@ pub struct DreamerAgent<B: Backend> {
     pub rep_projector: Option<Mlp<B>>,
     /// DreamerPro prototypes (only allocated if variant == DreamerPro).
     pub prototypes: Option<Tensor<B, 2>>,
+    /// CNN encoder for image observations (None for vector observations).
+    pub encoder: Option<ConvEncoder<B>>,
     /// Runtime config.
     pub config: DreamerConfig,
 }
@@ -153,18 +164,38 @@ impl DreamerConfig {
             _ => None,
         };
 
+        let encoder = self.encoder_config.as_ref().map(|cfg| cfg.init(device));
+
         DreamerAgent {
             rssm,
             actor,
             critic,
             rep_projector,
             prototypes,
+            encoder,
             config: self.clone(),
         }
     }
 }
 
 impl<B: Backend> DreamerAgent<B> {
+    /// Encode image observations through the CNN encoder.
+    ///
+    /// If no encoder is configured, returns the input unchanged (assumes
+    /// observations are already flat vectors).
+    ///
+    /// Input: `[batch, C, H, W]` images (when encoder is present).
+    /// Output: `[batch, embed_dim]` feature vectors.
+    pub fn encode_images(&self, images: Tensor<B, 4>) -> Tensor<B, 2> {
+        match &self.encoder {
+            Some(enc) => enc.forward(images),
+            None => {
+                let [batch, c, h, w] = images.dims();
+                images.reshape([batch, c * h * w])
+            }
+        }
+    }
+
     /// Compute the full RSSM state feature vector `[h, z]`.
     pub fn state_features(&self, state: &RssmState<B>) -> Tensor<B, 2> {
         Tensor::cat(vec![state.h.clone(), state.z.clone()], 1)
@@ -174,6 +205,24 @@ impl<B: Backend> DreamerAgent<B> {
     pub fn act(&self, state: &RssmState<B>) -> Tensor<B, 2> {
         let features = self.state_features(state);
         self.actor.forward(features)
+    }
+
+    /// Sample an action from the actor output using straight-through.
+    ///
+    /// For discrete actions: applies straight-through one-hot (argmax forward,
+    /// softmax gradient backward), matching DreamerV3's approach.
+    ///
+    /// For continuous actions: returns the raw output as the action mean.
+    /// (Full reparameterized sampling requires a separate log_std head.)
+    pub fn sample_action(&self, state: &RssmState<B>) -> Tensor<B, 2> {
+        let logits = self.act(state);
+        if self.config.discrete_actions {
+            straight_through_onehot(logits)
+        } else {
+            // For continuous, logits are action means; during imagination
+            // we use the mean (deterministic policy) for stability.
+            logits
+        }
     }
 
     /// Critic forward: state → twohot value logits `[batch, 255]`.
@@ -189,6 +238,38 @@ impl<B: Backend> DreamerAgent<B> {
         let device = state.h.device();
         TwohotEncoder::new().decode(probs, &device)
     }
+}
+
+/// Straight-through one-hot: forward pass uses argmax, backward uses softmax.
+///
+/// `one_hot(argmax(logits)) + softmax(logits) - softmax(logits).detach()`
+///
+/// This is the standard approach in DreamerV3 for discrete actions during
+/// imagination, allowing gradients to flow through the action selection.
+fn straight_through_onehot<B: Backend>(logits: Tensor<B, 2>) -> Tensor<B, 2> {
+    let [batch, n] = logits.dims();
+    let device = logits.device();
+
+    let probs = burn::tensor::activation::softmax(logits, 1);
+
+    // Argmax
+    let indices: Tensor<B, 1, Int> = probs.clone().argmax(1).squeeze_dim::<1>(1);
+
+    // Build one-hot via index comparison
+    let indices_2d = indices.unsqueeze_dim::<2>(1);
+    let arange_data: Vec<i32> = (0..n as i32).collect();
+    let arange: Tensor<B, 2, Int> = Tensor::from_data(
+        burn::tensor::TensorData::new(arange_data, [1, n]),
+        &device,
+    )
+    .repeat_dim(0, batch);
+
+    let one_hot_mask = arange.equal(indices_2d.repeat_dim(1, n));
+    let one_hot: Tensor<B, 2> =
+        Tensor::zeros([batch, n], &device).mask_fill(one_hot_mask, 1.0);
+
+    // Straight-through: gradient flows through probs
+    one_hot + probs.clone() - probs.detach()
 }
 
 // ---------------------------------------------------------------------------
@@ -411,13 +492,13 @@ pub fn dreamer_actor_critic_loss<B: Backend>(
     let device = initial_states.h.device();
     let config = &agent.config;
 
-    // 1. Imagination rollout
+    // 1. Imagination rollout (using straight-through sampled actions)
     let traj: ImaginedTrajectory<B> = imagine_rollout(
         &agent.rssm,
         initial_states,
         |h, z| {
             let state = RssmState { h, z };
-            agent.act(&state)
+            agent.sample_action(&state)
         },
         config.horizon,
     );
@@ -484,11 +565,14 @@ pub fn dreamer_actor_critic_loss<B: Backend>(
     let actor_loss = actor_loss / config.horizon as f32;
     let avg_entropy = total_entropy / config.horizon as f32;
 
-    // 6. Critic loss
+    // 6. Critic loss (clamp targets to symexp range to avoid one_hot panics)
     let mut critic_loss = Tensor::<B, 1>::zeros([1], &device);
+    let max_target = rl4burn_nn::symlog::symexp(Tensor::<B, 1>::from_floats([20.0], &device))
+        .into_scalar()
+        .elem::<f32>();
     for t in 0..config.horizon {
         let v_logits = agent.value_logits(&traj.states[t]);
-        let target = returns[t].clone().detach();
+        let target = returns[t].clone().detach().clamp(-max_target, max_target);
         critic_loss = critic_loss + twohot.loss(v_logits, target, &device);
     }
     let critic_loss = critic_loss / config.horizon as f32;
@@ -543,6 +627,7 @@ mod tests {
                 temperature: 0.1,
             },
             slow_critic_decay: 0.98,
+            encoder_config: None,
         }
     }
 

@@ -14,6 +14,7 @@
 
 use burn::prelude::*;
 use burn::tensor::activation::log_softmax;
+use burn::tensor::IndexingUpdateOp;
 
 // ---------------------------------------------------------------------------
 // Symlog / symexp
@@ -95,10 +96,15 @@ impl TwohotEncoder {
         values: Tensor<B, 1>,
         _device: &B::Device,
     ) -> Tensor<B, 2> {
-        let transformed = symlog(values);
+        // Clamp raw values to a safe range before symlog to prevent NaN/Inf.
+        let safe_values = values.clamp(-1e15, 1e15);
+        let transformed = symlog(safe_values);
         let clamped = transformed.clamp(self.low, self.high);
 
+        let [batch] = clamped.dims();
+        let n = self.n_bins;
         let bin_width = self.bin_width();
+        let device = clamped.device();
 
         // Normalised position in [0, n_bins-1].
         let normalised = (clamped - self.low) / bin_width;
@@ -108,21 +114,43 @@ impl TwohotEncoder {
         let upper_weight = normalised - lower_f.clone();
         let lower_weight = upper_weight.clone().neg() + 1.0;
 
-        // Upper index, clamped so it doesn't exceed n_bins-1.
-        let upper_f = lower_f.clone().clamp(0.0, (self.n_bins - 2) as f32) + 1.0;
-        // Also clamp lower to valid range.
-        let lower_f = lower_f.clamp(0.0, (self.n_bins - 1) as f32);
+        // Clamp indices to valid range.
+        let lower_f = lower_f.clamp(0.0, (n - 1) as f32);
+        let upper_f = lower_f.clone().clamp(0.0, (n - 2) as f32) + 1.0;
 
-        // Build twohot via one_hot.
-        // one_hot expects the tensor values to be the index positions (as floats).
-        let lower_oh: Tensor<B, 2> = lower_f.one_hot(self.n_bins);
-        let upper_oh: Tensor<B, 2> = upper_f.one_hot(self.n_bins);
+        // Build twohot manually using gather/scatter to avoid one_hot's
+        // float-to-int cast which panics on NaN.
+        // Convert float indices to int safely via data extraction.
+        let lower_data: Vec<f32> = lower_f.to_data().to_vec().unwrap();
+        let upper_data: Vec<f32> = upper_f.to_data().to_vec().unwrap();
 
-        // weight * one_hot → [batch, n_bins]
+        let lower_idx: Vec<i32> = lower_data
+            .iter()
+            .map(|&v| (v as i32).clamp(0, (n - 1) as i32))
+            .collect();
+        let upper_idx: Vec<i32> = upper_data
+            .iter()
+            .map(|&v| (v as i32).clamp(0, (n - 1) as i32))
+            .collect();
+
+        let lower_idx_t: Tensor<B, 2, Int> = Tensor::from_data(
+            burn::tensor::TensorData::new(lower_idx, [batch, 1]),
+            &device,
+        );
+        let upper_idx_t: Tensor<B, 2, Int> = Tensor::from_data(
+            burn::tensor::TensorData::new(upper_idx, [batch, 1]),
+            &device,
+        );
+
+        // Scatter weights into the right bins
         let lower_weight_2d: Tensor<B, 2> = lower_weight.unsqueeze_dim(1);
         let upper_weight_2d: Tensor<B, 2> = upper_weight.unsqueeze_dim(1);
 
-        lower_weight_2d * lower_oh + upper_weight_2d * upper_oh
+        let mut result: Tensor<B, 2> = Tensor::zeros([batch, n], &device);
+        result = result.scatter(1, lower_idx_t.clone(), lower_weight_2d, IndexingUpdateOp::Add);
+        result = result.scatter(1, upper_idx_t, upper_weight_2d, IndexingUpdateOp::Add);
+
+        result
     }
 
     /// Decode a probability distribution back to scalar values.

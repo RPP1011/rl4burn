@@ -120,6 +120,7 @@ pub use rl4burn_algo::loss::representation::{
 pub use rl4burn_algo::dreamer::{
     DreamerAgent, DreamerConfig, DreamerStats, WorldModelStats, ActorCriticStats,
     dreamer_world_model_loss, dreamer_actor_critic_loss,
+    DreamerTrainer, DreamerTrainerConfig,
 };
 
 // Cloud deployment
