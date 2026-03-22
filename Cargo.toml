@@ -23,6 +23,7 @@ members = [
     "examples/lstm-policy",
     "examples/multi-agent",
     "examples/deploy-cloud",
+    "examples/dreamer",
     "crates/rl4burn-tune",
     "crates/rl4burn-tune-py",
 ]

@@ -97,6 +97,9 @@ pub use rl4burn_nn::polyak::polyak_update;
 pub use rl4burn_nn::rnn::{
     BlockGruCell, BlockGruCellConfig, GruCell, GruCellConfig, LstmCell, LstmCellConfig, LstmState,
 };
+pub use rl4burn_nn::conv::{ConvDecoder, ConvDecoderConfig, ConvEncoder, ConvEncoderConfig};
+pub use rl4burn_nn::mlp::{Mlp, MlpConfig, NormKind, RmsNorm, RmsNormConfig};
+pub use rl4burn_nn::multi_encoder::{MultiDecoder, MultiDecoderConfig, MultiEncoder, MultiEncoderConfig};
 pub use rl4burn_nn::rssm::{Rssm, RssmConfig, RssmState};
 pub use rl4burn_nn::symlog::{symexp, symlog, TwohotEncoder};
 pub use rl4burn_nn::vae::{BetaVae, BetaVaeConfig, VaeOutput};
@@ -108,6 +111,16 @@ pub use rl4burn_algo::loss::kl_balance::{
 };
 pub use rl4burn_algo::loss::policy::{policy_loss_continuous, policy_loss_discrete, value_loss};
 pub use rl4burn_algo::loss::multi_head_value::{multi_head_gae, multi_head_value_loss, MultiHeadGaeResult, MultiHeadValueConfig};
+pub use rl4burn_algo::loss::representation::{
+    barlow_twins_loss, infonce_loss, dreamerpro_loss, decoder_loss, image_decoder_loss,
+    sinkhorn, BarlowTwinsConfig, InfoNceConfig, DreamerProConfig, RepresentationVariant,
+};
+
+// Dreamer agent
+pub use rl4burn_algo::dreamer::{
+    DreamerAgent, DreamerConfig, DreamerStats, WorldModelStats, ActorCriticStats,
+    dreamer_world_model_loss, dreamer_actor_critic_loss,
+};
 
 // Cloud deployment
 #[cfg(feature = "cloud")]
