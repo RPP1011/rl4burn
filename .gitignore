@@ -5,4 +5,8 @@
 /checkpoints
 /wandb
 /.claude
-/plans__pycache__/
+/plans
+__pycache__/
+*.so
+*.pyd
+*.pyc
