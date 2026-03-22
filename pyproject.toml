@@ -1,0 +1,28 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "rl4burn-tune-py"
+version = "0.1.0"
+description = "Python bindings for rl4burn-tune hyperparameter optimization"
+requires-python = ">=3.9"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+    "numpy>=1.20",
+    "optuna==4.8.0",
+]
+
+[tool.maturin]
+manifest-path = "crates/rl4burn-tune-py/Cargo.toml"
+python-source = "python"
+features = ["pyo3/extension-module"]
+module-name = "rl4burn_tune_py"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
