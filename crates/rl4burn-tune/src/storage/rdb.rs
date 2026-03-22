@@ -18,55 +18,56 @@ pub struct SqliteStorage {
 impl SqliteStorage {
     /// Open (or create) a SQLite database at the given path.
     pub fn new(path: impl AsRef<Path>) -> Result<Self, StorageError> {
-        let conn = Connection::open(path).map_err(|e| {
-            StorageError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-        })?;
-        let storage = Self { conn: Mutex::new(conn) };
+        let conn = Connection::open(path).map_err(Self::sqlite_err)?;
+        let storage = Self {
+            conn: Mutex::new(conn),
+        };
         storage.init_tables()?;
         Ok(storage)
     }
 
     /// Create an in-memory SQLite database (useful for testing).
     pub fn in_memory() -> Result<Self, StorageError> {
-        let conn = Connection::open_in_memory().map_err(|e| {
-            StorageError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-        })?;
-        let storage = Self { conn: Mutex::new(conn) };
+        let conn = Connection::open_in_memory().map_err(Self::sqlite_err)?;
+        let storage = Self {
+            conn: Mutex::new(conn),
+        };
         storage.init_tables()?;
         Ok(storage)
     }
 
     fn init_tables(&self) -> Result<(), StorageError> {
-        self.conn.lock().unwrap()
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS studies (
-                    study_id INTEGER PRIMARY KEY,
-                    direction TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS trials (
-                    trial_id INTEGER PRIMARY KEY,
-                    study_id INTEGER NOT NULL,
-                    number INTEGER NOT NULL,
-                    state TEXT NOT NULL,
-                    value REAL,
-                    FOREIGN KEY (study_id) REFERENCES studies(study_id)
-                );
-                CREATE TABLE IF NOT EXISTS trial_params (
-                    trial_id INTEGER NOT NULL,
-                    param_name TEXT NOT NULL,
-                    param_value REAL NOT NULL,
-                    FOREIGN KEY (trial_id) REFERENCES trials(trial_id),
-                    PRIMARY KEY (trial_id, param_name)
-                );",
-            )
-            .map_err(|e| {
-                StorageError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-            })?;
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS studies (
+                study_id INTEGER PRIMARY KEY,
+                direction TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS trials (
+                trial_id INTEGER PRIMARY KEY,
+                study_id INTEGER NOT NULL,
+                number INTEGER NOT NULL,
+                state TEXT NOT NULL,
+                value REAL,
+                FOREIGN KEY (study_id) REFERENCES studies(study_id)
+            );
+            CREATE TABLE IF NOT EXISTS trial_params (
+                trial_id INTEGER NOT NULL,
+                param_name TEXT NOT NULL,
+                param_value REAL NOT NULL,
+                FOREIGN KEY (trial_id) REFERENCES trials(trial_id),
+                PRIMARY KEY (trial_id, param_name)
+            );",
+        )
+        .map_err(Self::sqlite_err)?;
         Ok(())
     }
 
     fn sqlite_err(e: rusqlite::Error) -> StorageError {
-        StorageError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+        StorageError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            e.to_string(),
+        ))
     }
 
     fn direction_to_str(d: Direction) -> &'static str {
@@ -103,20 +104,6 @@ impl SqliteStorage {
             _ => TrialState::Fail,
         }
     }
-
-    /// Look up the internal rowid for a trial by study_id and trial number.
-    fn trial_rowid(&self, study_id: usize, trial_number: usize) -> Result<i64, StorageError> {
-        self.conn.lock().unwrap()
-            .query_row(
-                "SELECT trial_id FROM trials WHERE study_id = ?1 AND number = ?2",
-                params![study_id as i64, trial_number as i64],
-                |row| row.get(0),
-            )
-            .map_err(|_| StorageError::TrialNotFound {
-                study_id,
-                trial_number,
-            })
-    }
 }
 
 impl Storage for SqliteStorage {
@@ -125,7 +112,8 @@ impl Storage for SqliteStorage {
         conn.execute(
             "INSERT INTO studies (direction) VALUES (?1)",
             params![Self::direction_to_str(direction)],
-        ).map_err(Self::sqlite_err)?;
+        )
+        .map_err(Self::sqlite_err)?;
         Ok(conn.last_insert_rowid() as usize)
     }
 
@@ -143,6 +131,7 @@ impl Storage for SqliteStorage {
 
     fn get_all_trials(&self, study_id: usize) -> Result<Vec<FrozenTrial>, StorageError> {
         let conn = self.conn.lock().unwrap();
+
         // Verify study exists.
         let _dir_str: String = conn
             .query_row(
@@ -154,7 +143,8 @@ impl Storage for SqliteStorage {
 
         let mut stmt = conn
             .prepare(
-                "SELECT trial_id, number, state, value FROM trials WHERE study_id = ?1 ORDER BY number",
+                "SELECT trial_id, number, state, value FROM trials \
+                 WHERE study_id = ?1 ORDER BY number",
             )
             .map_err(Self::sqlite_err)?;
 
@@ -163,15 +153,17 @@ impl Storage for SqliteStorage {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
             })
             .map_err(Self::sqlite_err)?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(Self::sqlite_err)?;
 
-        let mut trials = Vec::new();
+        let mut trials = Vec::with_capacity(trial_rows.len());
         for (trial_id, number, state_str, value) in trial_rows {
             let mut param_stmt = conn
-                .prepare("SELECT param_name, param_value FROM trial_params WHERE trial_id = ?1")
+                .prepare(
+                    "SELECT param_name, param_value FROM trial_params WHERE trial_id = ?1",
+                )
                 .map_err(Self::sqlite_err)?;
-            let trial_params: HashMap<String, f64> = param_stmt
+            let params_map: HashMap<String, f64> = param_stmt
                 .query_map(params![trial_id], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
                 })
@@ -182,7 +174,7 @@ impl Storage for SqliteStorage {
             let mut trial = FrozenTrial::new(number as usize);
             trial.state = Self::str_to_state(&state_str);
             trial.value = value;
-            trial.params = trial_params;
+            trial.params = params_map;
             trials.push(trial);
         }
 
@@ -191,6 +183,7 @@ impl Storage for SqliteStorage {
 
     fn add_trial(&mut self, study_id: usize, trial: FrozenTrial) -> Result<(), StorageError> {
         let conn = self.conn.lock().unwrap();
+
         // Verify study exists.
         let _: String = conn
             .query_row(
@@ -208,56 +201,141 @@ impl Storage for SqliteStorage {
                 Self::state_to_str(trial.state),
                 trial.value,
             ],
-        ).map_err(Self::sqlite_err)?;
+        )
+        .map_err(Self::sqlite_err)?;
 
         let trial_id = conn.last_insert_rowid();
+
         for (name, value) in &trial.params {
             conn.execute(
-                "INSERT INTO trial_params (trial_id, param_name, param_value) VALUES (?1, ?2, ?3)",
+                "INSERT INTO trial_params (trial_id, param_name, param_value) \
+                 VALUES (?1, ?2, ?3)",
                 params![trial_id, name, value],
-            ).map_err(Self::sqlite_err)?;
+            )
+            .map_err(Self::sqlite_err)?;
         }
 
         Ok(())
     }
 
-    fn set_trial_state(&mut self, study_id: usize, trial_number: usize, state: TrialState) -> Result<(), StorageError> {
-        let trial_id = self.trial_rowid(study_id, trial_number)?;
+    fn set_trial_state(
+        &mut self,
+        study_id: usize,
+        trial_number: usize,
+        state: TrialState,
+    ) -> Result<(), StorageError> {
         let conn = self.conn.lock().unwrap();
+        let trial_id: i64 = conn
+            .query_row(
+                "SELECT trial_id FROM trials WHERE study_id = ?1 AND number = ?2",
+                params![study_id as i64, trial_number as i64],
+                |row| row.get(0),
+            )
+            .map_err(|_| StorageError::TrialNotFound {
+                study_id,
+                trial_number,
+            })?;
         conn.execute(
             "UPDATE trials SET state = ?1 WHERE trial_id = ?2",
             params![Self::state_to_str(state), trial_id],
-        ).map_err(Self::sqlite_err)?;
+        )
+        .map_err(Self::sqlite_err)?;
         Ok(())
     }
 
-    fn set_trial_value(&mut self, study_id: usize, trial_number: usize, value: f64) -> Result<(), StorageError> {
-        let trial_id = self.trial_rowid(study_id, trial_number)?;
+    fn set_trial_value(
+        &mut self,
+        study_id: usize,
+        trial_number: usize,
+        value: f64,
+    ) -> Result<(), StorageError> {
         let conn = self.conn.lock().unwrap();
+        let trial_id: i64 = conn
+            .query_row(
+                "SELECT trial_id FROM trials WHERE study_id = ?1 AND number = ?2",
+                params![study_id as i64, trial_number as i64],
+                |row| row.get(0),
+            )
+            .map_err(|_| StorageError::TrialNotFound {
+                study_id,
+                trial_number,
+            })?;
         conn.execute(
             "UPDATE trials SET value = ?1 WHERE trial_id = ?2",
             params![value, trial_id],
-        ).map_err(Self::sqlite_err)?;
+        )
+        .map_err(Self::sqlite_err)?;
         Ok(())
     }
 
-    fn set_trial_param(&mut self, study_id: usize, trial_number: usize, name: &str, value: f64) -> Result<(), StorageError> {
-        let trial_id = self.trial_rowid(study_id, trial_number)?;
+    fn set_trial_param(
+        &mut self,
+        study_id: usize,
+        trial_number: usize,
+        name: &str,
+        value: f64,
+    ) -> Result<(), StorageError> {
         let conn = self.conn.lock().unwrap();
+        let trial_id: i64 = conn
+            .query_row(
+                "SELECT trial_id FROM trials WHERE study_id = ?1 AND number = ?2",
+                params![study_id as i64, trial_number as i64],
+                |row| row.get(0),
+            )
+            .map_err(|_| StorageError::TrialNotFound {
+                study_id,
+                trial_number,
+            })?;
         conn.execute(
-            "INSERT OR REPLACE INTO trial_params (trial_id, param_name, param_value) VALUES (?1, ?2, ?3)",
+            "INSERT OR REPLACE INTO trial_params (trial_id, param_name, param_value) \
+             VALUES (?1, ?2, ?3)",
             params![trial_id, name, value],
-        ).map_err(Self::sqlite_err)?;
+        )
+        .map_err(Self::sqlite_err)?;
         Ok(())
     }
 
-    fn set_trial_user_attr(&mut self, study_id: usize, trial_number: usize, _key: &str, _value: &str) -> Result<(), StorageError> {
-        let _tid = self.trial_rowid(study_id, trial_number)?;
+    fn set_trial_user_attr(
+        &mut self,
+        study_id: usize,
+        trial_number: usize,
+        _key: &str,
+        _value: &str,
+    ) -> Result<(), StorageError> {
+        // User attrs are not stored in the minimal 3-table schema.
+        let conn = self.conn.lock().unwrap();
+        let _: i64 = conn
+            .query_row(
+                "SELECT trial_id FROM trials WHERE study_id = ?1 AND number = ?2",
+                params![study_id as i64, trial_number as i64],
+                |row| row.get(0),
+            )
+            .map_err(|_| StorageError::TrialNotFound {
+                study_id,
+                trial_number,
+            })?;
         Ok(())
     }
 
-    fn set_trial_system_attr(&mut self, study_id: usize, trial_number: usize, _key: &str, _value: &str) -> Result<(), StorageError> {
-        let _tid = self.trial_rowid(study_id, trial_number)?;
+    fn set_trial_system_attr(
+        &mut self,
+        study_id: usize,
+        trial_number: usize,
+        _key: &str,
+        _value: &str,
+    ) -> Result<(), StorageError> {
+        // System attrs are not stored in the minimal 3-table schema.
+        let conn = self.conn.lock().unwrap();
+        let _: i64 = conn
+            .query_row(
+                "SELECT trial_id FROM trials WHERE study_id = ?1 AND number = ?2",
+                params![study_id as i64, trial_number as i64],
+                |row| row.get(0),
+            )
+            .map_err(|_| StorageError::TrialNotFound {
+                study_id,
+                trial_number,
+            })?;
         Ok(())
     }
 }
@@ -270,10 +348,16 @@ mod tests {
     fn test_create_study_and_direction() {
         let mut storage = SqliteStorage::in_memory().unwrap();
         let id = storage.create_study(Direction::Minimize).unwrap();
-        assert_eq!(storage.get_study_direction(id).unwrap(), Direction::Minimize);
+        assert_eq!(
+            storage.get_study_direction(id).unwrap(),
+            Direction::Minimize
+        );
 
         let id2 = storage.create_study(Direction::Maximize).unwrap();
-        assert_eq!(storage.get_study_direction(id2).unwrap(), Direction::Maximize);
+        assert_eq!(
+            storage.get_study_direction(id2).unwrap(),
+            Direction::Maximize
+        );
         assert_ne!(id, id2);
     }
 
