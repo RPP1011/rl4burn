@@ -301,4 +301,4 @@ test dqn_solves_cartpole         ... ok  (~9s)
 
 ## License
 
-MIT OR Apache-2.0
+MIT
